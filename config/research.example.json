@@ -12,7 +12,7 @@
   "runtime_max_agent_calls_per_day": 30,
   "runtime_max_parallel_agents": 2,
   "runtime_max_parallel_runs": 1,
-  "agent_timeout_seconds": 600,
+  "agent_timeout_seconds": null,
   "sandbox": true,
   "runtime_recovery_max_attempts": 2,
   "runtime_recovery_retry_seconds": 30,

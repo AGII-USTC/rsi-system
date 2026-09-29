@@ -16,7 +16,7 @@ RSI 以用户提供的 Mission 为目标，记录任务委派、协作消息、�
   "thinking": "high",
   "runtime_max_parallel_agents": 2,
   "runtime_max_parallel_runs": 1,
-  "agent_timeout_seconds": 600
+  "agent_timeout_seconds": null
 }
 ```
 

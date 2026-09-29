@@ -206,9 +206,11 @@ Researcher 或 coordinator 调用 `rsi_research(action="create")` 创建子问�
   "thinking": "high",
   "runtime_max_parallel_agents": 2,
   "runtime_max_parallel_runs": 1,
-  "agent_timeout_seconds": 600
+  "agent_timeout_seconds": null
 }
 ```
+
+`agent_timeout_seconds: null` 表示模型 Agent 不设总执行时限，由完成任务、主动停止、故障或其他资源边界结束调用。任务租约继续续期；Runner 的单次实验时限单独设置，不受此项影响。正在执行的调用保留启动时的时限，配置更改在下一次 Agent 调用生效。
 
 模型供应商的非密钥索引由 Pi 使用；API key 放在私有 key 文件或系统 Secret Service，权限应为 0600。不要把真实 key、私有 URL、token、账号或机器路径提交到仓库。任务授权仍由 Mission 决定：没有 `allow_code_candidates` 时，coder 派发会被拒绝；没有服务器模拟授权时，不应把本地草稿称为服务器实验。
 
