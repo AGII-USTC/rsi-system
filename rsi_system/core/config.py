@@ -26,4 +26,12 @@ def load_research_config(root: Path, *, config_dir: Path | None = None) -> dict:
         public["pi_executable"] = shutil.which("pi") or "pi"
     if not public.get("python") or public["python"] == "python":
         public["python"] = sys.executable
+    for key, default in (("runtime_recovery_max_attempts", 2),
+                         ("runtime_recovery_retry_seconds", 30),
+                         ("runtime_recovery_max_retry_seconds", 300)):
+        value = public.setdefault(key, default)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{key} must be a nonnegative integer")
+    if public["runtime_recovery_max_retry_seconds"] < public["runtime_recovery_retry_seconds"]:
+        raise ValueError("maximum recovery delay must be at least the initial delay")
     return public

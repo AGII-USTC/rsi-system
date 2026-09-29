@@ -58,6 +58,25 @@ def test_old_continue_does_not_schedule_and_checkpoint_is_idempotent_by_call(tmp
         assert not [task for task in store.list_tasks("autonomy") if task["scope"].get("continuation")]
 
 
+def test_structured_continuation_opt_out_is_persisted_without_queuing(tmp_path):
+    runtime, researcher = setup(tmp_path)
+    bridge = ToolBridge(runtime.root, researcher["task_id"])
+    result = checkpoint(bridge, "opt-out", {"requested": False})
+    assert result["ok"] and result["task_id"] is None
+    with RuntimeStore(runtime.store_path) as store:
+        payload = store.research_checkpoints("autonomy", researcher["task_id"])[0]["payload"]
+        assert payload["continuation"] == {"requested": False, "status": "not_requested"}
+        assert not [task for task in store.list_tasks("autonomy") if task["scope"].get("continuation")]
+
+
+def test_continuation_objective_is_opaque_and_not_treated_as_opt_out(tmp_path):
+    runtime, researcher = setup(tmp_path)
+    bridge = ToolBridge(runtime.root, researcher["task_id"])
+    result = checkpoint(bridge, "opaque", {
+        "objective": "No follow-up task requested; parent owns active Runner evidence."})
+    assert result["ok"] and result["task_id"]
+
+
 def test_failed_source_cancels_queued_continuation_and_budget_is_reserved(tmp_path):
     runtime, researcher = setup(tmp_path, budget=3)
     bridge = ToolBridge(runtime.root, researcher["task_id"])
@@ -139,3 +158,26 @@ def test_long_checkpoint_stays_out_of_prompt_projection_but_is_readable_by_statu
     status = ToolBridge(runtime.root, coordinator["task_id"]).call({"tool": "rsi_status", "call_id": "status", "args": {"task_id": researcher["task_id"], "checkpoint_id": checkpoint_id}})
     assert status["ok"], status
     assert marker in status["research_checkpoint"]["payload"]["summary"]
+
+
+@pytest.mark.parametrize('dependency_status', ['completed', 'failed', 'cancelled'])
+def test_continuation_waits_for_terminal_dependency_and_receives_failure(tmp_path, dependency_status):
+    runtime, researcher = setup(tmp_path)
+    bridge = ToolBridge(runtime.root, researcher['task_id'])
+    child = bridge.call({'tool': 'rsi_delegate', 'call_id': 'child', 'args': {
+        'role': 'researcher', 'objective': 'Check', 'idea_id': 'idea'}})
+    followup = checkpoint(bridge, 'next', {'objective': 'Interpret the result', 'after_task_ids': [child['task_id']]})
+    with RuntimeStore(runtime.store_path) as store:
+        dependency = store.claim_task('autonomy')
+        assert dependency['task_id'] == child['task_id']
+        assert store.claim_task('autonomy') is None  # Source has not finished.
+        store.finish_task(researcher['task_id'], researcher['lease_token'], {'summary': 'ready'})
+        assert store.claim_task('autonomy') is None  # Dependency still running.
+        store.finish_task(dependency['task_id'], dependency['lease_token'],
+                          {'summary': 'result', 'error': 'diagnostic error' if dependency_status == 'failed' else None},
+                          status=dependency_status)
+        continued = store.claim_task('autonomy')
+        assert continued['task_id'] == followup['task_id']
+    evidence = ToolBridge(runtime.root, continued['task_id']).call({
+        'tool': 'rsi_status', 'call_id': 'read-result', 'args': {'task_id': child['task_id']}})
+    assert evidence['ok'] and evidence['status'] == dependency_status

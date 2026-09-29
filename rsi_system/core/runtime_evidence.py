@@ -106,6 +106,10 @@ def build_evidence_bundle(root, store, task, output_dir):
         copy_bytes("wiki", "inventory.json", inventory.read_bytes(), "Wiki page inventory", "publisher hashes")
 
     for run in store.list_runs(task["mission_id"]):
+        # Runner registration precedes execution. Its live intent and outputs
+        # are not frozen evidence and must not enter a reviewer's input bundle.
+        if run["status"] not in {"completed", "failed"}:
+            continue
         if compositions and run["run_id"] not in source_run_ids:
             producer = store.task(run["task_id"]) if run.get("task_id") else None
             if not producer or producer["scope"].get("research_node_id") != research_node_id:

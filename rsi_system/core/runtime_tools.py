@@ -462,7 +462,7 @@ class ToolBridge:
         checkpoint = normalize_checkpoint(args)
         continuation = normalize_continuation(args.get("continuation"))
         child = None
-        if continuation is not None:
+        if continuation is not None and continuation.get("requested", True):
             after_ids = [safe_id(item, "after_task_id") for item in continuation.get("after_task_ids", [])]
             continuation = {**continuation, "after_task_ids": after_ids}
             stopped = [event for event in store.events(parent["mission_id"])
@@ -490,8 +490,10 @@ class ToolBridge:
             if existing:
                 raise ValueError("a continuation has already been requested for this task")
         payload = dict(checkpoint)
+        if continuation is not None and not continuation.get("requested", True):
+            payload["continuation"] = {"requested": False, "status": "not_requested"}
         with store.atomic():
-            if continuation is not None:
+            if continuation is not None and continuation.get("requested", True):
                 if store.remaining_agent_tasks(parent["mission_id"]) == 0:
                     raise ValueError("continuation exceeds Mission agent task budget")
                 child = store.create_task(parent["mission_id"], "researcher", continuation["objective"],

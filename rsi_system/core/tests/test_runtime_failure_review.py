@@ -83,7 +83,7 @@ def test_unreviewed_failure_blocks_immediate_stop_and_resume_preserves_evidence(
         store.set_mission_status("m", "paused", reason="Unreviewed task failure")
         store.resume_mission("m", reason="Operator reviewed failure")
         assert store.deferred_stop("m") is None
-        assert store.task(old["task_id"])["status"] == "cancelled"
+        assert store.task(old["task_id"])["status"] == "failed"  # Resume preserves the original failure.
         assert store.task(old["task_id"])["output"] == {"error": "provider unavailable"}
 
 

@@ -124,12 +124,23 @@ def normalize_continuation(value: Mapping[str, Any] | None) -> dict[str, Any] | 
     if value is None:
         return None
     data = _object(value, "checkpoint.continuation")
+    # A researcher may explicitly record that a checkpoint needs no follow-up.
+    # This is deliberately structured: continuation objectives are opaque user
+    # text and must never be interpreted as an opt-out by matching prose.
+    requested = data.get("requested", True)
+    if type(requested) is not bool:
+        raise ValueError("continuation.requested must be a boolean")
+    if not requested:
+        unknown = set(data) - {"requested"}
+        if unknown:
+            raise ValueError(f"continuation opt-out has unknown fields: {sorted(unknown)}")
+        return {"requested": False}
     result = {"objective": _bounded_text(data.get("objective"), "continuation.objective")}
     after = data.get("after_task_ids", [])
     if not isinstance(after, list) or any(not isinstance(item, str) or not item.strip() for item in after):
         raise ValueError("continuation.after_task_ids must be a list of nonempty strings")
     result["after_task_ids"] = [item.strip() for item in after]
-    unknown = set(data) - {"objective", "after_task_ids"}
+    unknown = set(data) - {"objective", "after_task_ids", "requested"}
     if unknown:
         raise ValueError(f"continuation has unknown fields: {sorted(unknown)}")
     if len(_json(result).encode("utf-8")) > _MAX_CHECKPOINT_BYTES:

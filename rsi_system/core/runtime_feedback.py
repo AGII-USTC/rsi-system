@@ -24,8 +24,9 @@ def new_research_feedback(store, mission_id, after_version, *, final_review=Fals
                 if not source or not source["scope"].get("research_node_id"):
                     continue
             found.append(event)
-        elif final_review and event["kind"] in {"run_registered", "exploration_feedback"}:
-            found.append(event)
+        elif final_review and event["kind"] in {"run_registered", "run_finalized", "exploration_feedback"}:
+            if event["kind"] != "run_registered" or payload.get("status") not in {"prepared", "running"}:
+                found.append(event)
         elif (final_review and event["kind"] == "communication_published"
               and payload.get("author_role") not in {"coordinator", "curator"}
               and payload.get("task_status") == "completed"):

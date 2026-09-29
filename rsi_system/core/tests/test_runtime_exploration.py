@@ -355,6 +355,10 @@ def test_retryable_model_failure_queues_one_bounded_continuation(tmp_path):
         queued = [item for item in store.list_tasks("m") if item["status"] == "queued"]
         assert len(queued) == 1 and queued[0]["scope"]["reply_to_task_id"] == original["task_id"]
         assert any(event["kind"] == "model_task_continued" for event in store.events("m"))
+        assert queued[0]["scope"]["retry_not_before"]
+        assert store.claim_task("m") is None  # Backoff prevents an immediate provider retry.
+        store.db.execute("UPDATE task_scopes SET retry_not_before=NULL")
+        store.db.commit()
     second = runtime.tick(agent_runner=agent)
     assert second["status"] == "completed"
     with RuntimeStore(runtime.store_path) as store:

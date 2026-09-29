@@ -149,7 +149,7 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
               communication_manifest: Path | None = None, exploratory: bool = False,
               runtime_root: Path | None = None, task_id: str | None = None,
               python_executable: str | None = None,
-              external_manifest: Path | None = None) -> dict:
+              external_manifest: Path | None = None, decision_repair: bool = False) -> dict:
     if role not in TOOLS or (timeout_seconds is not None and (
             type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 1800)):
         raise ValueError("invalid agent role or timeout")
@@ -167,7 +167,7 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
     (output_dir / "prompt.txt").write_text(prompt)
     argv = [executable, "--mode", "json", "--print", "--no-session", "--no-approve",
             "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-themes",
-            "--no-extensions", "--tools", TOOLS[role]]
+            "--no-extensions", "--tools", "read" if decision_repair else TOOLS[role]]
     if thinking is not None:
         argv += ["--thinking", thinking]
     if guard is not None:
@@ -176,16 +176,16 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
         if role in {"analyzer", "critic"} and (
                 runtime_root is None or task_id is None or not runtime_tools.is_file()):
             raise ValueError("review bash requires the active RSI tool bridge extension")
-        if runtime_root is not None and task_id is not None and runtime_tools.is_file():
+        if not decision_repair and runtime_root is not None and task_id is not None and runtime_tools.is_file():
             argv += ["--extension", str(runtime_tools.resolve())]
         mcp = guard.parent / "pi-mcp.ts"
-        if role in {"coordinator", "researcher", "coder"} and mcp.is_file():
+        if not decision_repair and role in {"coordinator", "researcher", "coder"} and mcp.is_file():
             argv += ["--extension", str(mcp.resolve())]
         github = guard.parent / "pi-github.ts"
-        if role in {"coordinator", "researcher", "coder"} and github.is_file():
+        if not decision_repair and role in {"coordinator", "researcher", "coder"} and github.is_file():
             argv += ["--extension", str(github.resolve())]
         web = guard.parent / "pi-web.ts"
-        if role in {"coordinator", "researcher", "coder"} and web.is_file():
+        if not decision_repair and role in {"coordinator", "researcher", "coder"} and web.is_file():
             argv += ["--extension", str(web.resolve())]
     if model:
         argv += ["--model", model]
@@ -229,7 +229,7 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
     started, started_mono = time.time(), time.monotonic()
     with ExitStack() as stack:
         bridge = None
-        if runtime_root is not None and task_id is not None:
+        if not decision_repair and runtime_root is not None and task_id is not None:
             from .runtime_tools import serve_tools
             socket_path, bridge = stack.enter_context(serve_tools(Path(runtime_root).resolve().parents[1], task_id))
             env["RSI_TOOL_SOCKET"] = str(socket_path)

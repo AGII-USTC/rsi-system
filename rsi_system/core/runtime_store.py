@@ -139,6 +139,8 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
             self.db.execute("ALTER TABLE task_scopes ADD COLUMN research_mandate_json TEXT")
         if "continuation_json" not in scope_columns:
             self.db.execute("ALTER TABLE task_scopes ADD COLUMN continuation_json TEXT")
+        if "retry_not_before" not in scope_columns:
+            self.db.execute("ALTER TABLE task_scopes ADD COLUMN retry_not_before TEXT")
         # Keep the legacy column for old databases; -1 represents unlimited delegation.
         self.db.execute("UPDATE task_scopes SET delegate_budget=-1 WHERE delegate_budget!=-1")
         self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS runs_task_once ON runs(task_id) WHERE task_id IS NOT NULL")
@@ -268,8 +270,8 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
     def resume_mission(self, mission_id: str, *, reason: str) -> dict[str, Any]:
         """Resume after an operator has reviewed bounded task failures.
 
-        Failed task payloads remain immutable evidence; cancelled projections are
-        excluded from the next retry budget so a reviewed outage can be retried.
+        Failed tasks and their original payloads remain failure evidence.
+        Resuming neither refunds budget nor rewrites historical outcomes.
         """
         mission_id = safe_id(mission_id, "mission_id")
         self._begin()
@@ -284,8 +286,10 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
                     (mission_id, "Finish previously queued tasks before stopping", now, "[]"))
             elif mission["status"] != "active":
                 self.db.execute("DELETE FROM deferred_mission_stops WHERE mission_id=?", (mission_id,))
-            self.db.execute("UPDATE agent_tasks SET status='cancelled',updated_at=? WHERE mission_id=? AND status='failed'",
-                            (now, mission_id))
+            # Failed rows are immutable evidence.  Older code relabelled every
+            # failure as cancelled here, which erased the distinction between a
+            # provider outage and an operator cancellation and reset recovery
+            # accounting on every resume.
             self._commit()
         except Exception:
             self._rollback()
@@ -350,7 +354,8 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
                     delegate_budget: int | None = None, research_node_id: str | None = None,
                     research_revision: int | None = None, review_run_id: str | None = None,
                     task_kind: str = "standard", research_mandate: Mapping[str, Any] | None = None,
-                    continuation: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                    continuation: Mapping[str, Any] | None = None,
+                    retry_not_before: str | None = None) -> dict[str, Any]:
         if role not in ROLES:
             raise ValueError(f"role must be one of {ROLES}")
         objective, reason = _text(objective, "objective"), _text(reason, "reason")
@@ -376,10 +381,10 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
             safe_id(idea_id, "idea_id")
         if task_kind not in {"standard", "problem_reframe"}:
             raise ValueError("unknown task kind")
-        if task_kind == "problem_reframe" and (role != "researcher" or not parent or
-                parent["role"] != "coordinator" or idea_id or candidate_id or
-                reply_to_task_id or experiment):
-            raise ValueError("problem reframe requires an independent coordinator-delegated researcher")
+        if task_kind == "problem_reframe" and (role != "researcher" or idea_id or candidate_id or experiment or
+                (not parent and not reply_to_task_id) or
+                (parent and parent["role"] != "coordinator" and not reply_to_task_id)):
+            raise ValueError("problem reframe requires a coordinator-delegated researcher or linked recovery")
         if research_node_id is None and parent:
             research_node_id = parent["scope"]["research_node_id"]
             research_revision = parent["scope"]["research_revision"]
@@ -424,6 +429,11 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
             raise ValueError("reply target belongs to another Mission")
         if reply and reply["scope"]["idea_id"] and reply["scope"]["idea_id"] != idea_id:
             raise ValueError("reply target belongs to another Idea branch")
+        if task_kind == "problem_reframe" and reply_to_task_id:
+            if (not reply or reply["role"] != "researcher" or
+                    reply["scope"].get("task_kind") != "problem_reframe" or
+                    reply["scope"].get("research_node_id") != research_node_id):
+                raise ValueError("problem reframe recovery must reference the original independent reframe")
         if experiment is not None and (role != "runner" or candidate_id is not None):
             raise ValueError("exploration experiment requires a candidate-free runner")
         self._begin()
@@ -461,12 +471,12 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
                             (task_id, mission_id, role, objective, reason, candidate_id, "queued",
                              mission["version"], 0, None, None, None, None, now, now))
             depth = (self.task_scope(parent_task_id)["depth"] + 1) if parent_task_id else 0
-            self.db.execute("INSERT INTO task_scopes(task_id,parent_task_id,idea_id,reply_to_task_id,experiment_json,depth,delegate_budget,review_run_id,task_kind,research_mandate_json,continuation_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            self.db.execute("INSERT INTO task_scopes(task_id,parent_task_id,idea_id,reply_to_task_id,experiment_json,depth,delegate_budget,review_run_id,task_kind,research_mandate_json,continuation_json,retry_not_before) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                             (task_id, parent_task_id, idea_id, reply_to_task_id,
                              _json(_object(experiment, "experiment")) if experiment is not None else None,
                              depth, -1, review_run_id, task_kind,
                              _json(research_mandate) if research_mandate else None,
-                             _json(continuation) if continuation else None))
+                             _json(continuation) if continuation else None, retry_not_before))
             if research_node_id is not None:
                 self.db.execute("INSERT INTO research_task_bindings VALUES(?,?,?,?)",
                                 (task_id, mission_id, research_node_id, research_revision))
@@ -496,12 +506,12 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
         if not task_id:
             return {"parent_task_id": None, "idea_id": None, "reply_to_task_id": None, "experiment": None,
                     "depth": 0, "delegate_budget": None, "research_node_id": None, "research_revision": None,
-                    "review_run_id": None, "task_kind": "standard", "research_mandate": None, "continuation": None}
+                    "review_run_id": None, "task_kind": "standard", "research_mandate": None, "continuation": None, "retry_not_before": None}
         row = self.db.execute("SELECT * FROM task_scopes WHERE task_id=?", (safe_id(task_id, "task_id"),)).fetchone()
         if not row:
             return {"parent_task_id": None, "idea_id": None, "reply_to_task_id": None, "experiment": None,
                     "depth": 0, "delegate_budget": None, "research_node_id": None, "research_revision": None,
-                    "review_run_id": None, "task_kind": "standard", "research_mandate": None, "continuation": None}
+                    "review_run_id": None, "task_kind": "standard", "research_mandate": None, "continuation": None, "retry_not_before": None}
         result = dict(row)
         result["delegate_budget"] = None
         experiment = result.pop("experiment_json")
@@ -542,6 +552,8 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
             row = None
             for queued in rows:
                 queued_task = self.task(queued["task_id"])
+                if queued_task and queued_task["scope"].get("retry_not_before") and queued_task["scope"]["retry_not_before"] > _now():
+                    continue
                 if queued_task and queued_task["scope"].get("continuation"):
                     if stopping:
                         continue
@@ -764,6 +776,31 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
         self._commit()
         return self.run(run_id)  # type: ignore[return-value]
 
+    def finalize_run(self, run_id: str, status: str, evidence: Mapping[str, Any]) -> dict[str, Any]:
+        """Finalize a provisionally registered local Runner Run idempotently."""
+        if status not in {"completed", "failed", "cancelled", "interrupted"}:
+            raise ValueError("invalid terminal Run status")
+        encoded = _json(evidence)
+        digest = hashlib.sha256(encoded.encode()).hexdigest()
+        current = self.run(run_id)
+        if current is None:
+            raise ValueError("unknown Run")
+        if current["status"] in {"completed", "failed", "cancelled", "interrupted"}:
+            if current["status"] != status or current.get("evidence_sha256") != digest:
+                raise ValueError("terminal Run cannot be overwritten")
+            return current
+        self.db.execute("UPDATE runs SET status=?,evidence_json=?,evidence_sha256=?,updated_at=? WHERE run_id=? AND status NOT IN ('completed','failed','cancelled','interrupted')",
+                        (status, encoded, digest, _now(), safe_id(run_id, "run_id")))
+        if self.db.execute("SELECT changes()").fetchone()[0] == 0:
+            current = self.run(run_id)
+            if current and current["status"] == status and current.get("evidence_sha256") == digest:
+                return current
+            raise ValueError("Run finalized concurrently")
+        self.event(current["mission_id"], "run_finalized", {"run_id": run_id, "status": status,
+                    "evidence_sha256": digest})
+        self._commit()
+        return self.run(run_id)  # type: ignore[return-value]
+
     def queued_or_running(self, mission_id: str) -> int:
         return self.db.execute("SELECT count(*) FROM agent_tasks WHERE mission_id=? AND status IN ('queued','running')",
                                (mission_id,)).fetchone()[0]
@@ -781,7 +818,7 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
         return max(0, limit - used)
 
     def apply_coordinator_decision(self, task: Mapping[str, Any], payload: Mapping[str, Any],
-                                   requested: list[dict[str, Any]]) -> None:
+                                   requested: list[dict[str, Any]], *, keep_active: bool = False) -> None:
         """Atomically validate the snapshot, dispatch the whole batch and finish its lease."""
         self._begin()
         try:
@@ -892,7 +929,7 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
                     (mission_id, "Coordinator requested stop after queued tasks complete", now, _json(reviewed_ids)))
             else:
                 self.db.execute("DELETE FROM deferred_mission_stops WHERE mission_id=?", (mission_id,))
-            status = "active" if deferred or (payload["decision"] == "wait" and pending) else {
+            status = "active" if deferred or (payload["decision"] == "wait" and (pending or keep_active)) else {
                 "schedule": "active", "wait": "paused", "stop": "stopped"}[payload["decision"]]
             self.db.execute("UPDATE missions SET status=?,version=?,updated_at=? WHERE mission_id=?",
                             (status, version, now, mission_id))

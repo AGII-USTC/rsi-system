@@ -200,7 +200,8 @@ def test_runner_reuses_completed_experiment_after_crash_before_import(tmp_path, 
     with pytest.raises(KeyboardInterrupt):
         coordinator.tick()
     with RuntimeStore(coordinator.store_path) as store:
-        assert store.list_runs("m") == []
+        assert len(store.list_runs("m")) == 1
+        assert store.list_runs("m")[0]["status"] == "prepared"  # Launch is registered before execution.
         expire(store)
     monkeypatch.setattr(runtime_runs, "run_once", lambda *_, **__: pytest.fail("must not execute twice"))
     result = RuntimeCoordinator(root).tick()

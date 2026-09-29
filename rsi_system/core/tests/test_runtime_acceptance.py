@@ -113,10 +113,10 @@ def test_concurrent_task_creation_reserves_budget_once(tmp_path):
     assert any("budget" in result for result in results)
 
 
-def test_expired_task_pauses_for_reconciliation_instead_of_waiting_forever(tmp_path):
-    coordinator = RuntimeCoordinator(tmp_path)
+def test_expired_task_pauses_when_automatic_recovery_is_disabled(tmp_path):
+    coordinator = RuntimeCoordinator(project(tmp_path))
     with RuntimeStore(coordinator.store_path) as store:
-        store.create_mission(MissionSpec("m", "audit"))
+        store.create_mission(MissionSpec("m", "audit", resources={"max_recovery_attempts": 0}))
         store.create_task("m", "researcher", "read", "audit")
         task = store.claim_task("m")
         store.db.execute("UPDATE agent_tasks SET lease_until='2000-01-01T00:00:00+00:00'")

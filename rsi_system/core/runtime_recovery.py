@@ -22,11 +22,19 @@ def _recover_expired(coordinator, store, mission, task, *, agent_runner, require
     directory = coordinator.runtime_root / "tasks" / task["task_id"]
     if task["role"] == "runner":
         if task.get("candidate_id"):
-            recoverable = (directory / "runner_input.json").is_file()
+            from .runtime_runner_durability import stable_runner_id
+            run_directory = coordinator.runtime_root / "runs" / stable_runner_id(task["task_id"])
+            recoverable = (directory / "runner_input.json").is_file() or not run_directory.exists()
         else:
             from .runtime_exploration import exploration_run_id
-            receipt = coordinator.runtime_root / "runs" / exploration_run_id(task["task_id"]) / "run_record.json"
-            recoverable = receipt.is_file()
+            from .runtime_runner_durability import classify_runner_recovery
+            run_directory = coordinator.runtime_root / "runs" / exploration_run_id(task["task_id"])
+            recovery = classify_runner_recovery(run_directory)
+            if recovery["state"] == "active":
+                return {"status": "waiting", "task_id": task["task_id"], "reason": "runner_executor_active"}
+            # The exploration entry point validates receipts or records an
+            # uncertain failure. It launches only with an unstarted intent.
+            recoverable = True
     else:
         recoverable = (directory / "input.json").is_file() and (directory / "agent_result.json").is_file()
         if recoverable:

@@ -77,6 +77,12 @@ python -m rsi_system.core.runtime_cli --root . pause sharing-methods-001 --reaso
 python -m rsi_system.core.runtime_cli --root . resume sharing-methods-001 --reason "已完成检查"
 ```
 
+临时模型错误默认最多追加 2 次关联重试，分别等待 30、60 秒；每次调用仍计入原 Mission 和每日预算。配置文件中的 `runtime_recovery_max_attempts`、`runtime_recovery_retry_seconds`、`runtime_recovery_max_retry_seconds` 控制次数、等待步长和最长等待。工作进程会续期正在执行的任务租约；失败记录不会因为 `resume` 被改成取消。
+
+Runner 会先登记 Run，再执行。恢复时，未启动的任务可继续；已有完整回执的只导入结果；进程仍活着的继续等待；已经跨过启动边界但没有回执的记录为“不确定中断”，交回研究员判断，不自动重跑。`prepared` 记录不算实验成功，也不进入评审证据包。确定需要重测时应创建新任务，说明重测原因并消耗新的实验额度。
+
+研究员不需要后续任务时，省略 `continuation` 或设置 `{"requested": false}`。需要继续时填写真实目标及 `after_task_ids`；系统等来源任务完成和这些依赖结束后才领取，失败结果也会交给研究员分析。不要把“不需要后续任务”写进 `objective`，那仍表示请求一项任务。
+
 `status` 读取 `.rsi/runtime/state.sqlite3`。不要直接编辑 SQLite；需要改变状态时使用 CLI 或 Agent 工具，以便事件和版本保持一致。
 
 ## 3. 节点、任务和角色如何配合

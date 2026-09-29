@@ -13,8 +13,11 @@ from .runtime_communications import (checked_file, load_manifest, publish_direct
 from .runtime_types import _json
 from .runtime_evaluation_summary import persist_evaluation_summary
 from .sandbox import candidate_environment, command
-from .worker import _stop_group
+from .worker import _linux_start_token, _stop_group
 from .provenance import snapshot_source, sha256_tree
+from .runtime_runner_durability import (classify_runner_recovery, mark_receipt_ready,
+                                         mark_started, mark_uncertain, stable_runner_id,
+                                         write_intent)
 
 MAX_OUTPUT_FILES = 32
 MAX_ARTIFACT_BYTES = 2_000_000
@@ -173,6 +176,7 @@ def execute_exploration(coordinator, store, mission, task):
         raise ValueError("exploration script exceeds the input size limit")
     run_id = exploration_run_id(task["task_id"])
     directory = coordinator.runtime_root / "runs" / run_id
+    fresh_directory = not directory.exists() or not any(directory.iterdir())
     directory.mkdir(parents=True, exist_ok=True)
     inputs_directory = directory / "inputs"
     inputs_directory.mkdir(exist_ok=True)
@@ -236,17 +240,61 @@ def execute_exploration(coordinator, store, mission, task):
         bootstrap.write_text(bootstrap_text)
         atomic_json(frozen, pinned)
     receipt = directory / "run_record.json"
+    input_sha256 = hashlib.sha256(_json(pinned).encode()).hexdigest()
+    # Register the execution intent before any child process can be launched.
+    # Existing legacy receipts are adopted below; a legacy directory with no
+    # receipt is treated as ambiguous and cannot be replayed automatically.
+    if fresh_directory and not (directory / "execution_intent.json").exists():
+        write_intent(directory, run_id=run_id, task_id=task["task_id"],
+                     input_sha256=input_sha256, executor="local", attempt=1,
+                     stage="prepared", source_commit=source_commit)
+    recovery = classify_runner_recovery(directory, receipt=receipt)
+    identity = recovery.get("record")
+    if identity and (identity.get("task_id"), identity.get("run_id"), identity.get("input_sha256")) != (
+            task["task_id"], run_id, input_sha256):
+        raise ValueError("Runner intent identity does not match frozen inputs")
+    # Reserve the Mission Run before launch.  The task unique index makes this
+    # idempotent on recovery; evidence remains provisional until a receipt.
+    with store.atomic():
+        store.validate_task(task)
+        store.create_run(mission["mission_id"], None, task["task_id"], "exploration",
+                         "prepared", source_commit, pinned,
+                         {"status": "prepared", "kind": "exploration", "artifact_dir": str(directory),
+                          "run_id": run_id, "input_sha256": input_sha256,
+                          "execution_status": "prepared", "measurement_status": "none"},
+                         idea_ref=task["scope"]["idea_id"])
     if receipt.exists():
+        if recovery["state"] == "invalid_receipt" and recovery.get("record", {}).get("receipt_sha256"):
+            raise ValueError("exploration receipt hash does not match durable Runner intent")
         evidence = json.loads(receipt.read_text())
-        expected_input = saved if frozen.exists() else pinned
-        if evidence.get("input_sha256") != hashlib.sha256(_json(expected_input).encode()).hexdigest():
+        if evidence.get("status") not in {"completed", "failed"}:
+            raise ValueError("exploration receipt is nonterminal or invalid")
+        if evidence.get("input_sha256") != input_sha256:
             raise ValueError("exploration receipt belongs to different inputs")
         for relative, expected in evidence.get("artifact_hashes", {}).items():
             artifact = directory / relative
             if artifact.is_symlink() or not artifact.resolve().is_relative_to(directory) or (
                     not artifact.is_file() or hashlib.sha256(artifact.read_bytes()).hexdigest() != expected):
                 raise ValueError("exploration receipt artifact changed")
+        if recovery.get("record") and recovery["record"].get("stage") != "completed":
+            mark_receipt_ready(directory, receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest())
+    elif recovery["state"] == "active":
+        raise RuntimeError("local Runner executor is still active; refusing duplicate execution")
+    elif recovery["state"] in {"uncertain", "invalid_intent", "missing_intent", "invalid_receipt"}:
+        reason = "Runner intent is interrupted or ambiguous; execution was not repeated"
+        if recovery["state"] == "invalid_intent":
+            reason = "Runner intent is corrupt; execution was not repeated"
+        if recovery.get("record") and recovery["state"] == "uncertain":
+            mark_uncertain(directory, reason=reason)
+        evidence = {"status": "failed", "kind": "exploration", "artifact_dir": str(directory),
+                    "source_commit": source_commit, "exit_code": None, "error": reason,
+                    "input_sha256": input_sha256, "script_sha256": pinned["script_sha256"],
+                    "execution_status": "uncertain_interrupted", "measurement_status": "unknown",
+                    "failure_class": "interrupted_execution", "runner_action": "report_to_researcher",
+                    "interpretation": "execution state is uncertain; no automatic retry was performed"}
     else:
+        if not recovery["safe_to_launch"]:
+            raise ValueError("Runner execution state does not authorize launch")
         max_seconds = min(mission["payload"]["resources"].get("max_seconds_per_run", 120), 120)
         output = directory / "output"
         output.mkdir(exist_ok=True)
@@ -265,12 +313,17 @@ def execute_exploration(coordinator, store, mission, task):
         error = None
         returncode = None
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            # Commit the uncertain launch boundary before Popen: a crash after
+            # this point must not permit replay even if no PID was recorded.
+            mark_started(directory)
             try:
                 process = subprocess.Popen(argv, cwd=directory, env=env, stdout=stdout, stderr=stderr,
                                            start_new_session=True)
             except OSError as exc:
                 error = f"Runner preflight could not start the script: {type(exc).__name__}: {exc}"
             else:
+                mark_started(directory, pid=process.pid,
+                             process_start_token=_linux_start_token(process.pid))
                 deadline = time.monotonic() + max_seconds
                 while process.poll() is None:
                     if time.monotonic() >= deadline:
@@ -310,11 +363,13 @@ def execute_exploration(coordinator, store, mission, task):
                     **classification,
                     "interpretation": "exploratory probe only; not a confirmed Candidate result"}
         atomic_json(receipt, evidence)
+        mark_receipt_ready(directory, receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest())
     with store.atomic():
         store.validate_task(task)
         run = store.create_run(mission["mission_id"], None, task["task_id"], "exploration",
                                evidence["status"], source_commit, pinned, evidence,
                                idea_ref=task["scope"]["idea_id"])
+        run = store.finalize_run(run["run_id"], evidence["status"], evidence)
         if run["status"] == "completed" and evidence.get("artifact_dir"):
             summary_path, summary = persist_evaluation_summary(
                 run, artifact_dir=evidence["artifact_dir"],

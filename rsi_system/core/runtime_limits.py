@@ -1,6 +1,19 @@
 """Durable invocation accounting and Mission evaluator binding."""
 import hashlib
+import json
 from .runtime_types import _json, _now
+
+
+def recovery_parent(store, task):
+    """Only runtime-recorded retries inherit invocation policy; replies are ordinary work."""
+    for event in reversed(store.events(task["mission_id"])):
+        if event["kind"] in {"model_task_continued", "tool_task_continued"}:
+            data = event["payload"]
+            if data.get("continuation_task_id") == task["task_id"]:
+                source = store.task(data["interrupted_task_id"])
+                if source and source["mission_id"] == task["mission_id"] and source["role"] == task["role"]:
+                    return source
+    return None
 
 
 class RuntimeLimits:

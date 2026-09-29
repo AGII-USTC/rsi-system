@@ -118,7 +118,7 @@ const delegation = {
     constraints: Type.Optional(Type.Array(Type.Object({ statement: Type.String({ minLength: 1, maxLength: 8000 }), source_ref: Type.String({ minLength: 1, maxLength: 8000 }) }, { additionalProperties: false }))),
     observations: Type.Optional(Type.Array(Type.Object({ statement: Type.String({ minLength: 1, maxLength: 8000 }), source_refs: Type.Array(Type.String({ minLength: 1, maxLength: 8000 }), { minItems: 1 }) }, { additionalProperties: false }))),
     suggestions: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 8000 })))
-  }, { additionalProperties: false })),
+  }, { additionalProperties: false, description: "Researcher-only assignment contract. Omit for coder, Runner, analyzer, critic, curator, and ordinary delegation." })),
 };
 
 const researchCheckpoint = Type.Object({
@@ -131,10 +131,18 @@ const researchCheckpoint = Type.Object({
   }, { additionalProperties: false })),
   next_question: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
   unresolved: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
-  continuation: Type.Optional(Type.Object({
-    objective: Type.String({ minLength: 1, maxLength: 8000 }),
-    after_task_ids: Type.Optional(Type.Array(Type.String({ minLength: 1 })))
-  }, { additionalProperties: false }))
+  continuation: Type.Optional(Type.Union([
+    Type.Object({
+      requested: Type.Optional(Type.Literal(true)),
+      objective: Type.String({ minLength: 1, maxLength: 8000,
+        description: "Concrete follow-up work. Omit the continuation object entirely when no follow-up is needed." }),
+      after_task_ids: Type.Optional(Type.Array(Type.String({ minLength: 1 }),
+        { description: "Task IDs whose terminal results are required before this follow-up starts; omit only for an independent follow-up." }))
+    }, { additionalProperties: false }),
+    // Structured opt-out. Never encode this choice in objective prose.
+    Type.Object({ requested: Type.Literal(false,
+      { description: "Record that this checkpoint requests no follow-up task." }) }, { additionalProperties: false })
+  ]))
 }, { additionalProperties: false });
 
 export default function (pi: any) {

@@ -53,6 +53,11 @@ def execute_runner(coordinator, store, mission, task):
             raise ValueError("runner inputs or evaluator changed since task registration")
     else:
         atomic_json(pinned_path, pinned)
+    # Reserve the Run before launch; the private worker registry owns process recovery.
+    with store.atomic():
+        store.validate_task(task)
+        store.create_run(mission["mission_id"], candidate["candidate_id"], task["task_id"],
+                         candidate["purpose"], "prepared", candidate["code_commit"], inputs, None)
     # A private task registry prevents the worker from claiming another queued experiment.
     with ExperimentStore(directory / "experiment.sqlite3") as experiments:
         record = experiments.get(run_id) or experiments.create(spec)
@@ -69,6 +74,8 @@ def execute_runner(coordinator, store, mission, task):
         store.validate_task(task)
         runtime_run = store.create_run(mission["mission_id"], candidate["candidate_id"], task["task_id"],
                                        candidate["purpose"], evidence["status"], evidence.get("source_commit"), inputs, evidence)
+        if runtime_run["status"] not in {"completed", "failed", "cancelled", "interrupted"}:
+            runtime_run = store.finalize_run(runtime_run["run_id"], evidence["status"], evidence)
         if runtime_run["status"] == "completed" and evidence.get("artifact_dir"):
             summary_path, summary = persist_evaluation_summary(
                 runtime_run, artifact_dir=evidence["artifact_dir"], candidate=candidate,

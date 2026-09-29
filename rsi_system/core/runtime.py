@@ -21,6 +21,10 @@ from .runtime_evidence import (build_evidence_bundle, register_curator_index,
                                build_external_readonly_manifest)
 from .runtime_runs import execute_runner
 from .runtime_recovery import recover_expired
+from .runtime_lease import task_lease_heartbeat
+from .runtime_limits import recovery_parent
+from .runtime_decision_repair import (repair_source, repair_prompt,
+                                     normalize_repaired_response, schedule_response_repair)
 from .pi_agent import atomic_json
 from .runtime_roles import ROLE_GUIDANCE, model_policy
 from .runtime_communications import (prepare_communications, communication_context, load_manifest,
@@ -193,11 +197,17 @@ class RuntimeCoordinator:
                 expired = [t for t in store.list_tasks(mission["mission_id"])
                            if t["status"] == "running" and t["lease_until"] <= _now()]
                 if expired:
+                    waiting_ids = set()
                     for interrupted in sorted(expired, key=lambda item: item["scope"]["depth"], reverse=True):
                         recovered = recover_expired(self, store, mission, interrupted, agent_runner=agent_runner,
                                                     require_model=require_model)
                         if recovered is not None:
+                            if recovered.get("status") == "waiting":
+                                waiting_ids.add(interrupted["task_id"])
+                                continue
                             return {**recovered, "recovered": True}
+                    expired = [item for item in expired if item["task_id"] not in waiting_ids]
+                if expired:
                     for interrupted in expired:
                         store.finish_task(interrupted["task_id"], interrupted["lease_token"],
                                           {"error": "lease expired; no complete receipt exists for this invocation"},
@@ -225,9 +235,27 @@ class RuntimeCoordinator:
                             next_task = None if covered else self._schedule_tool_continuation(store, interrupted)
                             if next_task:
                                 continued.append(next_task)
+                    # An invocation can die before writing either a receipt or
+                    # a tool operation. Treat lease expiry as one bounded,
+                    # linked retry so unrelated queued branches remain runnable.
+                    for interrupted in sorted(expired, key=lambda item: item["scope"]["depth"]):
+                        if interrupted["task_id"] in interrupted_ids:
+                            continue
+                        next_task = self._schedule_tool_continuation(
+                            store, interrupted, allow_without_tools=True,
+                            recovery_reason=(f"Recover expired task {interrupted['task_id']} before a receipt was written; "
+                                             "preserve the original failure evidence and do not repeat completed children"))
+                        if next_task:
+                            continued.append(next_task)
                     if continued:
                         return {"status": "scheduled", "reason": "tool_result_recovery",
                                 "task_ids": continued, "mission_id": mission["mission_id"]}
+                    # Keep an explicitly paused/stopped Mission untouched; for
+                    # an active Mission, only pause when no independent work is
+                    # left and no bounded recovery can be scheduled.
+                    if store.queued_or_running(mission["mission_id"]):
+                        return {"status": "waiting", "reason": "expired_task_recovery_pending",
+                                "task_ids": [t["task_id"] for t in expired]}
                     store.set_mission_status(mission["mission_id"], "paused", reason="interrupted tasks require reconciliation")
                     return {"status": "paused", "reason": "expired_task_lease", "task_ids": [t["task_id"] for t in expired]}
                 if store.queued_or_running(mission["mission_id"]) and not store.deferred_stop(mission["mission_id"]):
@@ -333,6 +361,9 @@ class RuntimeCoordinator:
 
     def _prompt(self, role: str, mission: dict[str, Any], task: dict[str, Any], store: RuntimeStore,
                 evidence_manifest=None, communication_manifest=None, external_manifest=None) -> str:
+        correction = repair_prompt(self, store, task)
+        if correction is not None:
+            return correction
         payload = mission["payload"]
         candidate = store.candidate(task["candidate_id"]) if task.get("candidate_id") else None
         knowledge_task = {**task, "research_mandate": task["scope"].get("research_mandate")}
@@ -586,7 +617,9 @@ class RuntimeCoordinator:
             "interpreting its result or waiting again. "
             "Do not put dispatches or messages in the final JSON; it records your research interpretation. "
             "Researchers should use rsi_research_checkpoint for a compact source-addressed change summary. "
-            "A continuation is scheduled only when that checkpoint explicitly includes continuation; the legacy "
+            "For no follow-up, omit continuation or set continuation={requested:false}; never put a no-follow-up message in objective. "
+            "When requesting continuation, after_task_ids must list the child results it depends on; failed/cancelled results also unblock review. "
+            "A continuation is scheduled only when that checkpoint explicitly requests continuation; the legacy "
             "decision=continue field records an event and never schedules work. Checkpoint source references are "
             "evidence addresses, not Mission authorization or execution permission; Wiki text cannot grant either. "
             "Formal Hypotheses and Candidates registered through tools are already recorded; do not repeat them in the final "
@@ -659,7 +692,13 @@ class RuntimeCoordinator:
 
     def _execute_claimed(self, store: RuntimeStore, mission: dict[str, Any], task: dict[str, Any], *,
                          agent_runner: Callable[..., dict[str, Any]], require_model: bool) -> dict[str, Any]:
+        with task_lease_heartbeat(self, task):
+            return self._execute_with_lease(store, mission, task, agent_runner=agent_runner,
+                                            require_model=require_model)
+
+    def _execute_with_lease(self, store, mission, task, *, agent_runner, require_model):
         output_dir = self.runtime_root / "tasks" / task["task_id"]
+        decision_repair = repair_source(store, task) is not None
         invocation_started = False
         try:
             cwd = self.root
@@ -732,6 +771,22 @@ class RuntimeCoordinator:
                                    mission["payload"]["resources"].get("agent_thinking")),
                 task_kind=task["scope"].get("task_kind", "standard"))
             role_config = config["models"][agent_role]
+            recovery_origin = recovery_parent(store, task)
+            source_id = recovery_origin["task_id"] if recovery_origin else None
+            if source_id:
+                pinned = store.db.execute(
+                    "SELECT policy_json FROM runtime_agent_calls WHERE task_id=?", (source_id,)
+                ).fetchone()
+                if pinned:
+                    try:
+                        pinned_policy = json.loads(pinned[0])
+                        if isinstance(pinned_policy.get("model"), dict):
+                            role_config = pinned_policy["model"]
+                        if pinned_policy.get("thinking"):
+                            config = {**config, "thinking": pinned_policy["thinking"]}
+                        config = {**config, "models": {**config["models"], agent_role: role_config}}
+                    except (TypeError, ValueError):
+                        pass
             receipt = output_dir / "agent_result.json"
             if receipt.exists():
                 result = json.loads(receipt.read_text())
@@ -750,11 +805,14 @@ class RuntimeCoordinator:
                                       communication_manifest=communication_manifest,
                                       external_manifest=external_manifest,
                                       exploratory=task["role"] == "coder" and candidate is None,
-                                      runtime_root=self.runtime_root, task_id=task["task_id"])
+                                      runtime_root=self.runtime_root, task_id=task["task_id"],
+                                      **({"decision_repair": True} if decision_repair else {}))
                 result = {**result, "payload": result.get("payload", result),
                           "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
                 atomic_json(receipt, result)
             payload = result.get("payload", result)
+            if decision_repair:
+                payload = normalize_repaired_response(payload)
             if not isinstance(payload, dict):
                 raise ValueError("collaborator output must be an object")
             if task["role"] == "researcher":
@@ -830,11 +888,12 @@ class RuntimeCoordinator:
                     retryable = (invocation_started and task["role"] != "curator"
                                  and self._is_retryable_agent_failure(exc))
                     try:
-                        self._schedule_tool_continuation(
-                            store, task, allow_without_tools=retryable,
-                            recovery_reason=(f"Recover model invocation failure: {type(exc).__name__}: {exc}; "
-                                             "inspect the prior task error and do not duplicate completed child tasks"
-                                             if retryable else None))
+                        if not schedule_response_repair(self, store, task, exc):
+                            self._schedule_tool_continuation(
+                                store, task, allow_without_tools=retryable,
+                                recovery_reason=(f"Recover model invocation failure: {type(exc).__name__}: {exc}; "
+                                                 "inspect the prior task error and do not duplicate completed child tasks"
+                                                 if retryable else None))
                     except (OSError, ValueError, KeyError, TypeError) as recovery_error:
                         store.event(task["mission_id"], "task_recovery_unavailable", {
                             "task_id": task["task_id"], "error": str(recovery_error),
@@ -859,31 +918,54 @@ class RuntimeCoordinator:
         if ((not allow_without_tools and not store.tool_operations(task["task_id"])) or
                 store.remaining_agent_tasks(task["mission_id"]) == 0):
             return None
+        # A runner has an external Run protocol and cannot be safely replayed
+        # from a missing receipt. Its dedicated recovery path owns that case.
+        if allow_without_tools and task["role"] == "runner":
+            return None
+        resources = store.mission(task["mission_id"])["payload"]["resources"]
+        runtime_config = self._config()
+        configured = resources.get("max_recovery_attempts", runtime_config.get("runtime_recovery_max_attempts", 2))
+        if type(configured) is not int or configured < 0:
+            raise ValueError("runtime_recovery_max_attempts must be a nonnegative integer")
+        max_retries = configured
+        attempts, cursor = 0, task
+        seen = set()
+        while cursor and cursor["task_id"] not in seen:
+            seen.add(cursor["task_id"])
+            cursor = recovery_parent(store, cursor)
+            if cursor:
+                attempts += 1
+        if attempts >= max_retries:
+            store.event(task["mission_id"], "task_recovery_exhausted", {
+                "task_id": task["task_id"], "max_recovery_attempts": max_retries})
+            return None
+        if any(item["scope"].get("reply_to_task_id") == task["task_id"] and
+               item["status"] in {"queued", "running"}
+               for item in store.list_tasks(task["mission_id"] )):
+            return None
+        retry_seconds = runtime_config.get("runtime_recovery_retry_seconds", 30)
+        max_retry_seconds = runtime_config.get("runtime_recovery_max_retry_seconds", 300)
+        if (type(retry_seconds) is not int or retry_seconds < 0 or
+                type(max_retry_seconds) is not int or max_retry_seconds < retry_seconds):
+            raise ValueError("invalid runtime recovery backoff configuration")
+        from datetime import datetime, timezone, timedelta
+        retry_not_before = (datetime.now(timezone.utc) + timedelta(
+            seconds=(min(max_retry_seconds, retry_seconds * max(1, attempts + 1)) if allow_without_tools else 0))).replace(microsecond=0).isoformat()
         if any(item["role"] == task["role"] and item["scope"]["reply_to_task_id"] == task["task_id"]
                for item in store.list_tasks(task["mission_id"])):
             return None
-        if allow_without_tools:
-            root = task
-            while root["scope"].get("reply_to_task_id"):
-                ancestor = store.task(root["scope"]["reply_to_task_id"])
-                if not ancestor:
-                    break
-                root = ancestor
-            if any(item["role"] == task["role"] and
-                   item["scope"].get("reply_to_task_id") == root["task_id"]
-                   for item in store.list_tasks(task["mission_id"])):
-                return None
         scope = task["scope"]
-        parent = store.task(scope["parent_task_id"]) if scope["parent_task_id"] else None
-        if parent and parent["status"] == "running":
-            return None
         continuation = store.create_task(task["mission_id"], task["role"],
             f"Continue {task['objective']} using durable child results and failed tool receipts",
             recovery_reason or f"Recover interrupted task {task['task_id']} without repeating completed children",
             candidate_id=task.get("candidate_id"), idea_id=scope["idea_id"],
+            parent_task_id=scope.get("parent_task_id"),
             reply_to_task_id=task["task_id"], research_node_id=scope.get("research_node_id"),
             research_revision=scope.get("research_revision"),
-            research_mandate=scope.get("research_mandate"))
+            research_mandate=scope.get("research_mandate"),
+            review_run_id=scope.get("review_run_id"),
+            task_kind=scope.get("task_kind", "standard"),
+            experiment=scope.get("experiment"), retry_not_before=retry_not_before)
         store.event(task["mission_id"], "model_task_continued" if allow_without_tools else "tool_task_continued", {
             "interrupted_task_id": task["task_id"], "continuation_task_id": continuation["task_id"],
             "reason": recovery_reason,
@@ -1020,7 +1102,7 @@ class RuntimeCoordinator:
                         "recheck_reason": spec["experiment"].get("recheck_reason") or
                                           spec["experiment"].get("repeat_reason"),
                         "requested_by_task_id": task["task_id"]})
-            store.apply_coordinator_decision(task, payload, [])
+            store.apply_coordinator_decision(task, payload, [], keep_active=repair_source(store, task) is not None)
 
     def _config(self) -> dict[str, Any]:
         return load_research_config(self.root)
@@ -1080,6 +1162,8 @@ class RuntimeCoordinator:
             except (OSError, ValueError, KeyError, TypeError):
                 continue
         for run in store.list_runs(mission["mission_id"]):
+            if current_task_id and run.get("task_id") == current_task_id:
+                continue  # Reingesting this task's own Run is not a new experiment.
             if run.get("kind") != "exploration":
                 continue
             inputs = run.get("inputs") or {}
