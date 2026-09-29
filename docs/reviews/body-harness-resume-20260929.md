@@ -78,3 +78,11 @@
 代码已部署至服务器，备份 `.rsi/backups/runner-unlimited-20260929T154615Z/`。为避免把 null 传给已加载的旧执行器，尚未提前修改活动 Mission 的数值。维护脚本 `/tmp/rsi-activate-unlimited-runner.py` 暂停定时器的新派发，等待已执行任务正常交接、旧服务退出，再有记录地将 Mission 时限改为 null 并恢复定时器。不会杀掉当前 Agent。状态见服务器 `/tmp/rsi-unlimited-runner-activation.json`；若等待十分钟仍无安全边界，自动恢复原定时器，保留待切换状态，不能声称已生效。
 
 自动跟进说明已同步用户最新授权：模型 Agent 与 Runner 都取消总执行时限，不应重新应用旧的 15 分钟、180 秒或探针 120 秒上限；任务和实验总数量、并发及模型配置不变。
+
+## 23:53 北京时间：不限时切换完成并恢复研究
+
+旧任务已交接，主编排提交 maintenance handoff 后处于等待。维护脚本于 15:52:15 UTC 在没有执行中或排队任务、旧服务已退出时，把本 Mission `max_seconds_per_run` 从 180 改为 null，保留变更事件和原始数据库快照：`.rsi/backups/runner-unlimited-activate-20260929T155215Z/`。所有原定时器已恢复。随后核验私有 Agent 时限、普通 Runner 与探索 Runner 均接受 null，从 `task-d9f141fdbccc24595d41` 保存的 handoff/checkpoint 恢复同一个 Mission；没有恢复其他 Mission，也没有创建重复实验。
+
+此时 Mission active，剩余 15 个模型任务和 10 次实验，模型/思维强度/并发均未改变。维护等待已经结束；无时限配置确已激活，不再只是已部署未加载。
+
+主编排交接也明确：Run `run-c0a763c3097109ecf31f3796` 虽然程序退出成功，但产物报告源文件资格检查未通过，尚未产生模拟器回放或策略效果测量。这一科学/环境问题不因取消时间限制而自动解决，已明确告知恢复后的主编排，仍由研究员选择后续验证与修复路线。
