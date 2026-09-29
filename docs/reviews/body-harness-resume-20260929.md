@@ -86,3 +86,17 @@
 此时 Mission active，剩余 15 个模型任务和 10 次实验，模型/思维强度/并发均未改变。维护等待已经结束；无时限配置确已激活，不再只是已部署未加载。
 
 主编排交接也明确：Run `run-c0a763c3097109ecf31f3796` 虽然程序退出成功，但产物报告源文件资格检查未通过，尚未产生模拟器回放或策略效果测量。这一科学/环境问题不因取消时间限制而自动解决，已明确告知恢复后的主编排，仍由研究员选择后续验证与修复路线。
+
+## 23:56 北京时间跟进
+
+实际新调用确认配置生效：主编排 `task-841cd60881474c82d58c`（Astra/high）和归档员 `task-a0c7c103efb4414afb0b`（Sol/high）的调用账本均为 `timeout_seconds: null`；两者的 external manifest 均包含 8 个只读根目录，已不再是空清单。两者均有真实模型响应及文件/研究工具操作，本次未见供应商错误。Mission active，版本 221，`max_seconds_per_run` 为 null。
+
+独立查看探针 `run-c0a763c3097109ecf31f3796` 的原始 `output/command_effect.json`：其明确记录 `status=blocked`、`stage=source_qualification`，冻结源码中缺少指定的三个研究文件及 `examples/libero/main.py`。因此数据库的 Run completed 只代表脚本正常结束并返回阻塞诊断，不代表模拟器、策略或 Memory 验证完成。主编排已经读取此问题并继续评审，归档员正在整理来源，不追加重复实验或替主编排指定研究路线。
+
+## 00:16 北京时间更新：源码修复后第二个 Runner 探针
+
+Researcher `task-84c98a4d62c272d71298` 针对首个探针缺少源码的问题，发布了新的 hash-qualified bundle（包括 `examples/libero/main.py`、三个研究文件和配置），并明确这是新的输入指纹，不是重放旧 Run。主编排 `task-ad8b628a762a931481c8` 据此派出 Runner `task-4eb59b69e13859cc4219`，产生新 Run `run-8eb2c6d4bf36e1b858154d0c`。
+
+这次 Runner 的源码快照与四个文件哈希检查通过，但 `output/command_effect.json` 报告：`status=blocked`、`stage=dependency_preflight`，依赖检查显示 `mujoco/numpy/yaml` 存在，`robosuite` 不存在；没有构造 LIBERO 环境，没有 replay、动作效果、策略调用或 Memory 测量。Run envelope 的 `status=completed` 仅说明探针正常返回阻塞诊断；不能称为实验成功。新的 Run 资源回执明确记录 `max_seconds=null`，证明 Runner 不限总执行时限已实际生效。
+
+研究员、主编排和 Curator 均有真实模型响应和工具操作。Curator 已归档新的源链接 Wiki 页面，主编排正在审查并决定依赖边界的下一步。当前 Mission 仍 active；没有因为依赖缺失强行宣称算法无效，也没有重复旧 Run。
