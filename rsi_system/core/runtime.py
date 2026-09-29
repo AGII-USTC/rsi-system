@@ -559,6 +559,7 @@ class RuntimeCoordinator:
                            "local diagnostics are not controlled Run evidence."}
         context["exploration_contract"] = {
             "experiment": {"source_task_id": "completed author task",
+                           "environment": "optional authorized Runner environment name from available_environments; omit to use Mission default",
                            "script_file_id": "file_id of a published Python file from rsi_wait, rsi_status, or communications.available_files",
                            "question": "unknown being tested", "baseline": "comparison reference",
                            "expected_difference": "predicted contrast", "falsifier": "result against the Idea",
@@ -575,6 +576,18 @@ class RuntimeCoordinator:
         from .runtime_exploration import exploration_limits
         context["exploration_contract"]["limits"] = exploration_limits(
             mission["payload"]["resources"].get("max_seconds_per_run", 120))
+        environment_config = self._config().get("runner_environments", {})
+        allowed_environments = mission["payload"]["resources"].get("allowed_runner_environments", [])
+        context["exploration_contract"]["available_environments"] = {
+            name: {"kind": "docker", "policy_service": bool(environment_config[name].get("policy")),
+                   "gpu": environment_config[name].get("gpu", False)}
+            for name in allowed_environments if name in environment_config}
+        context["exploration_contract"]["default_environment"] = mission["payload"]["resources"].get("runner_environment")
+        context["exploration_contract"]["environment_usage"] = (
+            "Select only an available environment name. Runtime owns images, read-only mounts, GPU and private networking. "
+            "For a policy-enabled environment use RSI_POLICY_HOST and RSI_POLICY_PORT; never start Docker yourself. "
+            "Use RSI_EXPLORATION_INPUTS for published supporting files, RSI_EXPLORATION_OUTPUT for results. "
+            "A successful preflight or process exit is not a policy, task-success or adaptation result.")
         idea_id = task["scope"]["idea_id"]
         if role != "coordinator" and idea_id:
             context["tasks"] = [item for item in context["tasks"] if item["scope"]["idea_id"] == idea_id or
@@ -1135,7 +1148,10 @@ class RuntimeCoordinator:
                                           file_id=description.get("script_file_id"),
                                           path=description.get("script"), suffix=".py")
         raw = checked_file(source_manifest.parent, ref["path"], entry["sha256"])
+        from .runner_environments import select_environment
+        environment = select_environment(self._config(), mission, description)
         return {"source_task_id": source["task_id"],
+                "environment": environment["name"] if environment else None,
                 "script_file_id": description.get("script_file_id") or description.get("script"),
                 "script_sha256": hashlib.sha256(raw).hexdigest(),
                 "inputs_sha256": self._exploration_input_hash(source_manifest, manifest)}
@@ -1143,7 +1159,7 @@ class RuntimeCoordinator:
     @staticmethod
     def _same_exploration_fingerprint(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
         return all(left.get(key) == right.get(key) for key in (
-            "source_task_id", "script_file_id", "script_sha256", "inputs_sha256"))
+            "source_task_id", "script_file_id", "script_sha256", "inputs_sha256", "environment"))
 
     def _exploration_duplicates(self, store, mission, fingerprint: Mapping[str, Any], *,
                                 current_task_id: str | None = None) -> list[dict[str, Any]]:
@@ -1171,6 +1187,7 @@ class RuntimeCoordinator:
             inputs = run.get("inputs") or {}
             description = inputs.get("description") if isinstance(inputs, Mapping) else None
             existing = {"source_task_id": description.get("source_task_id") if isinstance(description, Mapping) else None,
+                        "environment": (inputs.get("runner_environment") or {}).get("name"),
                         "script_file_id": (description.get("script_file_id") or description.get("script"))
                         if isinstance(description, Mapping) else None,
                         "script_sha256": inputs.get("script_sha256") if isinstance(inputs, Mapping) else None,
@@ -1186,6 +1203,8 @@ class RuntimeCoordinator:
         description = spec.get("experiment")
         if not isinstance(description, Mapping):
             raise ValueError("exploration runner needs an experiment description")
+        from .runner_environments import select_environment
+        select_environment(self._config(), mission, description)
         source_task_id = description.get("source_task_id")
         source = store.task(source_task_id) if source_task_id else None
         if not source or source["mission_id"] != mission["mission_id"] or (

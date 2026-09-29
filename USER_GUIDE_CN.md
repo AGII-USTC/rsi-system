@@ -216,7 +216,7 @@ Mission 的 `resources.max_seconds_per_run: null` 表示 Runner 不设总执行�
 
 模型供应商的非密钥索引由 Pi 使用；API key 放在私有 key 文件或系统 Secret Service，权限应为 0600。不要把真实 key、私有 URL、token、账号或机器路径提交到仓库。任务授权仍由 Mission 决定：没有 `allow_code_candidates` 时，coder 派发会被拒绝；没有服务器模拟授权时，不应把本地草稿称为服务器实验。
 
-首次安装 Python 包后，在 macOS 或 Windows 也可以启动 Mission、使用节点图、消息、handoff、Wiki 和看板。没有 Linux/bubblewrap 时，核心流程仍然可用，researcher/coder 可以进行普通本地调用，但运行时会把它与隔离 shell 区分开；未经隔离执行的代码不能称为受控 Runner 实验。用户可在 macOS 使用容器运行器或其他隔离执行器，需另行接入和验收。
+首次安装 Python 包后，在 macOS 或 Windows 也可以启动 Mission、使用节点图、消息、handoff、Wiki 和看板。没有 Linux/bubblewrap 时，核心流程仍然可用，researcher/coder 可以进行普通本地调用，但运行时会把它与隔离 shell 区分开；未经隔离执行的代码不能称为受控 Runner 实验。探索 Runner 已支持管理员配置的 Docker 环境，配置和调用见 [Runner 环境指南](docs/design/runner-environments.md)。GPU、模拟器和镜像能否运行仍需在部署机器上验收；当前真实 GPU 验收在 Linux 服务器完成。
 
 ## 9. 看板和后台服务
 

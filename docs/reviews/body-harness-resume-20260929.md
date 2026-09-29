@@ -100,3 +100,28 @@ Researcher `task-84c98a4d62c272d71298` 针对首个探针缺少源码的问题�
 这次 Runner 的源码快照与四个文件哈希检查通过，但 `output/command_effect.json` 报告：`status=blocked`、`stage=dependency_preflight`，依赖检查显示 `mujoco/numpy/yaml` 存在，`robosuite` 不存在；没有构造 LIBERO 环境，没有 replay、动作效果、策略调用或 Memory 测量。Run envelope 的 `status=completed` 仅说明探针正常返回阻塞诊断；不能称为实验成功。新的 Run 资源回执明确记录 `max_seconds=null`，证明 Runner 不限总执行时限已实际生效。
 
 研究员、主编排和 Curator 均有真实模型响应和工具操作。Curator 已归档新的源链接 Wiki 页面，主编排正在审查并决定依赖边界的下一步。当前 Mission 仍 active；没有因为依赖缺失强行宣称算法无效，也没有重复旧 Run。
+
+## 00:38 北京时间更新：新增组合研究与停止评审
+
+Mission 仍 active，当前主编排 `task-93665f3ed38a167c8117` 正在评审，剩余 8 个模型任务和 9 次实验，没有新增 Run。新的重审任务 `task-f247356073f616bec27f` 已完成：它认为继续被动重算 V2 数据无法解决经验来源成本不匹配或闭环任务效用，建议在 Runner 依赖路径获得修复前暂缓分支，最终 Mission 决定留给主编排。
+
+本轮首次出现明确的组合对象 `composition-23207b452d2fdf024072`：固定输入为根节点 revision 9、body-state-transfer revision 3、simulator-command-effect-feasibility revision 5，输出 body-memory-feasible-next-test。它组合已有问题与证据来评估下一步，不是代码合并，也没有联合方案收益；其协议仍为 to_be_defined。
+
+需准确区分此次“独立再分析”和正式 problem_reframe：主编排两次 rsi_delegate 携带空 candidate_id 被拒（problem reframe needs an unanchored researcher task），随后选择创建组合研究任务。实际调用账本显示该任务 task_kind=standard、Sol/xhigh，不是用户为正式 problem_reframe 配置的 Astra/high。拒绝原因和绕行均被主编排写入 handoff，后续应审查参数契约易用性；不能声称 Astra 重审已完成。
+
+当前执行障碍仍是选定 Runner Python 缺少 robosuite；历史 Docker 镜像存在不等于通用探索 Runner 已有受控镜像选择能力。主编排已读到此区别，仍在决定后续或暂缓，未把技术探针 completed 误述为科学收益。
+## 2026-09-30：Runner 环境接口接入与 Mission 恢复
+
+用户要求先暂停研究并把已有 pi0.5/LIBERO 环境接入 Runner。研究 Mission `body-memory-open-20260929-001` 在接口验收期间保持 paused；服务器原有 40 个模型任务和 3 次 Runner 任务的历史没有删除。
+
+接口部署到 `/home/kang/embodied-rsi` 后，管理员配置了 `libero-sim` 与 `pi05-libero` 两个环境。Runner 只能选择 Mission allowlist 中的名称；镜像按 SHA 固定，项目与 checkpoint 只读挂载，策略服务使用本 Run 的内部网络，权重没有复制。Runner 的暂停/租约检查会中止容器，清理失败会保留回执并暂停 Mission。环境配置和使用说明见 `docs/design/runner-environments.md` 与 `deployment/rsi/runner-environments.example.json`。
+
+独立基础设施验收不占生产 Mission 预算。真实 Run `run-7ed6fc10576931f47b7834c2` 的回执位于服务器 `.rsi/acceptance/runner-environments-20260930/pi05-pass/`：LIBERO reset、10 次 warmup、pi0.5 推理、动作形状 `[10,7]`、动作进入仿真、只读源码和无 Docker socket 检查均通过，容器清理通过。该 Run 的 `purpose` 明确为 infrastructure acceptance，不是 Memory、成功率或适应收益证据。此前两次显存不足的失败回执也原样保存在 `pi05-oom-1` 和 `pi05-oom-2`；根因是同机其他进程占满显存，清理后验收通过。
+
+接口回归测试为 57 passed、6 skipped。服务器相关测试为 59 passed、1 failed；失败是服务器原有角色工具契约与本地角色测试基线的差异（coordinator 实际暴露了额外 GitHub 工具），不是 Runner 环境链路失败，未借此改写角色权限。
+
+随后按用户授权把 Mission 总额度补足到“当前剩余 48 个模型任务、12 次实验”：历史计数仍为 42 个 Agent 任务、3 个 Runner 任务，因此数据库上限为 88/15。Mission 已恢复为 active，四个定时器 active；恢复后主编排 Astra/high 与 Curator Sol/high 已产生真实调用，调用账本 `timeout_seconds=null`。此时新调用已消耗 2 个模型任务，当前剩余为 46 个模型任务、12 次实验。模型、思维强度、并发和不限时配置没有改变。
+
+每小时 heartbeat `rsi-2` 已启用。它只在确认模型中断、没有运行或排队任务且可安全接续时，保留失败证据、把剩余额度补足到 48/12 并恢复同一 Mission；正常运行、科学失败、主动暂停和未解决的外部依赖不会触发重置。
+
+这次工作证明了执行接口和恢复边界，尚未证明身体 Memory 带来科学收益；后续研究结果仍需由 Researcher、Analyzer 和 Critic 依据统一协议解释。

@@ -1,0 +1,39 @@
+{
+  "runner_environments": {
+    "pi05-libero": {
+      "image": "openpi_libero_eval:latest",
+      "python": "/.venv/bin/python",
+      "gpu": true,
+      "mounts": [
+        {"source": "/srv/pi05/openpi", "target": "/app"},
+        {"source": "/srv/pi05/libero-config", "target": "/libero-config"},
+        {"source": "/srv/pi05/cache", "target": "/openpi-cache"},
+        {"source": "/srv/rsi/deployment/rsi/pi05_policy_service.py", "target": "/rsi-policy-service.py"}
+      ],
+      "pythonpath": ["/app", "/app/src", "/app/packages/openpi-client/src", "/app/third_party/libero"],
+      "env": {
+        "LIBERO_CONFIG_PATH": "/libero-config",
+        "MUJOCO_GL": "egl",
+        "PYOPENGL_PLATFORM": "egl",
+        "NUMBA_CACHE_DIR": "/tmp/numba",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "XDG_CACHE_HOME": "/tmp/cache"
+      },
+      "policy": {
+        "image": "openpi_server:latest",
+        "python": "/.venv/bin/python",
+        "gpu": true,
+        "pythonpath": ["/app", "/app/src", "/app/packages/openpi-client/src"],
+        "port": 8012,
+        "command": ["/.venv/bin/python", "/rsi-policy-service.py", "--checkpoint", "/openpi-cache/openpi-assets/checkpoints/pi05_libero", "--port", "8012"],
+        "env": {
+          "OPENPI_DATA_HOME": "/openpi-cache",
+          "HF_HUB_OFFLINE": "1",
+          "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "XDG_CACHE_HOME": "/tmp/cache"
+        }
+      }
+    }
+  }
+}

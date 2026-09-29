@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import subprocess
@@ -12,6 +13,7 @@ from .runtime_communications import (checked_file, load_manifest, publish_direct
                                      resolve_handoff_file)
 from .runtime_types import _json
 from .runtime_evaluation_summary import persist_evaluation_summary
+from .runner_environments import select_environment, prepare_environment, launch_environment, cleanup_environment
 from .sandbox import candidate_environment, command
 from .worker import _linux_start_token, _stop_group
 from .provenance import snapshot_source, sha256_tree
@@ -225,6 +227,13 @@ def execute_exploration(coordinator, store, mission, task):
     else:
         pinned["resource_budget"] = {"max_seconds": exploration_limits(
             mission["payload"]["resources"].get("max_seconds_per_run", 120))["max_seconds"]}
+    if frozen.exists():
+        if "runner_environment" in saved:
+            pinned["runner_environment"] = saved["runner_environment"]
+    else:
+        selected = select_environment(coordinator._config(), mission, description)
+        if selected is not None:
+            pinned["runner_environment"] = prepare_environment(selected)
     if task["scope"].get("research_node_id"):
         pinned.update({"research_node": {"node_id": task["scope"]["research_node_id"],
                                          "revision": task["scope"]["research_revision"]},
@@ -291,6 +300,8 @@ def execute_exploration(coordinator, store, mission, task):
         reason = "Runner intent is interrupted or ambiguous; execution was not repeated"
         if recovery["state"] == "invalid_intent":
             reason = "Runner intent is corrupt; execution was not repeated"
+        if pinned.get("runner_environment"):
+            cleanup_environment(pinned["runner_environment"], directory)
         if recovery.get("record") and recovery["state"] == "uncertain":
             mark_uncertain(directory, reason=reason)
         evidence = {"status": "failed", "kind": "exploration", "artifact_dir": str(directory),
@@ -309,7 +320,7 @@ def execute_exploration(coordinator, store, mission, task):
         python = str(coordinator._config()["python"])
         argv = [python, "-I", str(bootstrap if not legacy_frozen else script),
                 *([] if legacy_frozen else [str(script)])]
-        if coordinator._config().get("sandbox", True):
+        if not pinned.get("runner_environment") and coordinator._config().get("sandbox", True):
             argv = command(argv, cwd=directory, writable=[output], readable=[directory],
                            protected=[coordinator.root / ".rsi", coordinator.root / ".git"])
         env = candidate_environment()
@@ -319,32 +330,51 @@ def execute_exploration(coordinator, store, mission, task):
         started = time.time()
         error = None
         returncode = None
+        execution = ({"kind": "docker", "environment": pinned["runner_environment"]["name"],
+                      "image_id": pinned["runner_environment"]["image_id"], "state": "preparing"}
+                     if pinned.get("runner_environment") else {"kind": "host", "python": python})
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            # Commit the uncertain launch boundary before Popen: a crash after
-            # this point must not permit replay even if no PID was recorded.
+            # Persist intent before creating containers or a policy sidecar.
             mark_started(directory)
+            boundary = (launch_environment(pinned["runner_environment"], directory, argv, env,
+                                           check_cancelled=lambda: store.validate_task(task))
+                        if pinned.get("runner_environment") else nullcontext((argv, env, execution)))
+            process = None
             try:
-                process = subprocess.Popen(argv, cwd=directory, env=env, stdout=stdout, stderr=stderr,
-                                           start_new_session=True)
-            except OSError as exc:
-                error = f"Runner preflight could not start the script: {type(exc).__name__}: {exc}"
-            else:
-                mark_started(directory, pid=process.pid,
-                             process_start_token=_linux_start_token(process.pid))
-                deadline = time.monotonic() + max_seconds if max_seconds is not None else None
-                while process.poll() is None:
-                    if deadline is not None and time.monotonic() >= deadline:
-                        error = "exploration time budget exhausted"
-                        _stop_group(process)
-                    elif stdout_path.stat().st_size + stderr_path.stat().st_size > MAX_LOG_BYTES:
-                        error = "exploration log budget exhausted"
-                        _stop_group(process)
-                    elif not output_within_budget(output, stdout_path.stat().st_size + stderr_path.stat().st_size):
-                        error = "exploration artifact budget exhausted"
-                        _stop_group(process)
-                    else:
-                        time.sleep(0.1)
-                returncode = process.returncode
+                with boundary as (launch, process_env, execution):
+                    atomic_json(directory / "execution_environment.json", execution)
+                    process = subprocess.Popen(launch, cwd=directory, env=process_env, stdout=stdout, stderr=stderr,
+                                               start_new_session=True)
+                    mark_started(directory, pid=process.pid,
+                                 process_start_token=_linux_start_token(process.pid))
+                    deadline = time.monotonic() + max_seconds if max_seconds is not None else None
+                    try:
+                        while process.poll() is None:
+                            store.validate_task(task)
+                            if deadline is not None and time.monotonic() >= deadline:
+                                error = "exploration time budget exhausted"
+                                _stop_group(process)
+                            elif stdout_path.stat().st_size + stderr_path.stat().st_size > MAX_LOG_BYTES:
+                                error = "exploration log budget exhausted"
+                                _stop_group(process)
+                            elif not output_within_budget(output, stdout_path.stat().st_size + stderr_path.stat().st_size):
+                                error = "exploration artifact budget exhausted"
+                                _stop_group(process)
+                            else:
+                                time.sleep(0.1)
+                        returncode = process.returncode
+                    finally:
+                        if process.poll() is None:
+                            _stop_group(process)
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                error = f"Runner environment/launch failed: {type(exc).__name__}: {exc}"
+                docker_record = directory / "docker_environment.json"
+                if docker_record.is_file():
+                    execution = json.loads(docker_record.read_text())
+        # Cleanup metadata may be completed by the environment context manager.
+        if execution.get("cleanup_errors"):
+            error = (error + "; " if error else "") + "Runner environment cleanup failed; operator reconciliation required"
+        atomic_json(directory / "execution_environment.json", execution)
         try:
             artifact_hashes = bounded_artifacts(directory, output, stdout_path, stderr_path)
             hashes_complete = True
@@ -358,6 +388,7 @@ def execute_exploration(coordinator, store, mission, task):
         evidence = {"status": status, "kind": "exploration", "artifact_dir": str(directory),
                     "source_commit": source_commit, "exit_code": returncode,
                     "error": error,
+                    "execution_environment": execution,
                     "artifact_diagnostics": artifact_diagnostics(output, stdout_path, stderr_path, max_seconds),
                     "artifact_hashes_complete": hashes_complete,
                     "started_at_unix": started, "finished_at_unix": time.time(),
@@ -365,7 +396,8 @@ def execute_exploration(coordinator, store, mission, task):
                     "script_sha256": pinned["script_sha256"],
                     "artifact_hashes": {**artifact_hashes, **{
                         name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
-                        for name in ("input.json", "probe.py", "runner_bootstrap.py")
+                        for name in ("input.json", "probe.py", "runner_bootstrap.py", "execution_environment.json",
+                                     "docker_environment.json", "policy.log", "docker_cleanup_errors.json")
                         if (directory / name).is_file()}},
                     **classification,
                     "interpretation": "exploratory probe only; not a confirmed Candidate result"}
@@ -416,4 +448,7 @@ def execute_exploration(coordinator, store, mission, task):
             run["repair_task_id"] = repair["task_id"]
         store.finish_task(task["task_id"], task["lease_token"], {
             "run": run, "repair_task_id": repair["task_id"] if repair else None})
+        if evidence.get("execution_environment", {}).get("cleanup_errors"):
+            store.set_mission_status(mission["mission_id"], "paused",
+                                     reason="Runner container cleanup needs operator reconciliation")
     return run

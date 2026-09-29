@@ -188,6 +188,7 @@ export default function (pi: any) {
       research_node_id: delegation.research_node_id, research_revision: delegation.research_revision,
       experiment: Type.Object({ source_task_id: Type.String(), script_file_id: Type.String({ description: "Published Python script file_id from a completed Agent handoff" }), question: Type.String(),
         baseline: Type.String(), expected_difference: Type.String(), falsifier: Type.String(),
+        environment: Type.Optional(Type.String({ minLength: 1, description: "Authorized Runner environment name from exploration_contract.available_environments; omit for Mission default" })),
         source_reason: Type.String(), review_roles: Type.Optional(Type.Array(Type.String())),
         recheck_reason: Type.Optional(Type.String({ minLength: 1, description: "Required when this exact source/script/input fingerprint intentionally repeats an existing exploration" })) },
         { additionalProperties: false }) }));
