@@ -286,8 +286,15 @@ class RuntimeCoordinator:
                 if mission["payload"]["resources"].get("knowledge_curator") is True:
                     pending = pending_record_ids(store, mission["mission_id"])
                     if pending:
+                        last_resume = max((event["version"] for event in store.events(mission["mission_id"])
+                                           if event["kind"] == "mission_status" and
+                                           event["payload"].get("status") == "active"), default=0)
+                        resume_event = next((event for event in reversed(store.events(mission["mission_id"]))
+                                             if event["version"] == last_resume), None)
+                        resumed_at = resume_event["created_at"] if resume_event else ""
                         curator_failures = sum(
-                            task["status"] == "failed" and task["role"] == "curator"
+                            task["status"] == "failed" and task["role"] == "curator" and
+                            task.get("updated_at", "") > resumed_at
                             for task in store.list_tasks(mission["mission_id"]))
                         if curator_failures >= 2:
                             store.set_mission_status(mission["mission_id"], "paused",
@@ -297,9 +304,6 @@ class RuntimeCoordinator:
                             store.set_mission_status(mission["mission_id"], "paused",
                                 reason="Mission agent task budget exhausted before curation")
                             return {"status": "paused", "reason": "agent_task_budget_exhausted"}
-                        last_resume = max((event["version"] for event in store.events(mission["mission_id"])
-                                           if event["kind"] == "mission_status" and
-                                           event["payload"].get("status") == "active"), default=0)
                         rejected = [event for event in store.events(mission["mission_id"])
                                     if event["kind"] == "knowledge_curation_rejected" and
                                     event["version"] > last_resume and
