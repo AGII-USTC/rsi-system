@@ -1,0 +1,49 @@
+.living-world,.world-stage{width:100%;height:100%;min-width:0;min-height:0}
+.world-stage{position:relative;overflow:hidden;isolation:isolate;background:#c8d9aa url('/assets/environments/collaboration-meadow.webp') center / cover no-repeat}
+.world-stage.is-office{background:#f1f4e9}
+.world-stage canvas{position:absolute;display:block;width:min(100%,171.4286dvh);max-width:none;height:auto;max-height:100%;left:50%;top:50%;transform:translate(-50%,-50%);touch-action:manipulation;cursor:default}
+.world-stage canvas.is-interactive{cursor:pointer}
+.world-focus-target{position:absolute;z-index:1;display:block;margin:0;padding:0;border:0;border-radius:4px;background:transparent;pointer-events:none}
+.world-focus-target:focus-visible{outline:2px solid #194f3b;outline-offset:2px;box-shadow:0 0 0 4px #fffdf0c9}
+.world-state{position:absolute;left:50%;bottom:28px;transform:translateX(-50%);max-width:calc(100% - 32px);padding:8px 12px;border-radius:5px;background:#fffdf2df;color:#465b42;font-size:12px;text-align:center;pointer-events:none}
+.world-state.error{color:#9e534e}
+.world-context{position:absolute;left:50%;top:50%;z-index:2;display:flex;flex-direction:column;width:min(280px,calc(100% - 20px));max-height:min(340px,calc(100% - 20px));padding:12px 13px 9px;border:1px solid #dce5d4;border-radius:6px;background:#fffdf4f5;box-shadow:0 8px 27px #314e2d36;color:#344c3b;backdrop-filter:blur(10px)}
+.world-context[data-placement=above]::after,.world-context[data-placement=below]::after{content:"";position:absolute;left:var(--world-arrow-x,50%);width:10px;height:10px;background:#fffdf4;border-right:1px solid #dce5d4;border-bottom:1px solid #dce5d4;transform:translateX(-50%) rotate(45deg)}
+.world-context[data-placement=above]::after{bottom:-6px}
+.world-context[data-placement=below]::after{top:-6px;transform:translateX(-50%) rotate(225deg)}
+.world-context-scroll{min-height:0;max-height:175px;overflow:auto;scrollbar-width:thin;padding-right:2px}
+.world-context.is-expanded .world-context-scroll{max-height:min(280px,calc(100dvh - 95px))}
+.world-context-label{display:block;padding-right:26px;font-size:12px;font-weight:760;color:#365d43;line-height:1.25}
+.world-context-status{display:block;margin-top:3px;padding-right:22px;font-size:10px;color:#72816e}
+.world-context h2{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin:9px 0 5px;font-size:13px;line-height:1.4;font-weight:720;overflow-wrap:anywhere}
+.world-context p{font-size:11px;line-height:1.45;color:#60715f;overflow-wrap:anywhere}
+.world-context-summary{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.world-context.is-expanded .world-context-summary{display:block}
+.world-context-meta{display:flex;flex-wrap:wrap;gap:3px 9px;margin-top:9px;font-size:10px;color:#80907c;overflow-wrap:anywhere}
+.world-context-details,.world-context-records{margin-top:10px;border-top:1px solid #e5eadf;padding-top:8px}
+.world-context-details>div{display:grid;grid-template-columns:50px minmax(0,1fr);gap:5px;margin:3px 0;font-size:10px;line-height:1.5}
+.world-context-details strong,.world-context-records>strong{font-size:10px;font-weight:700;color:#476c50}
+.world-context-details span{color:#647761;overflow-wrap:anywhere}
+.world-context-records article{margin-top:8px;padding-top:7px;border-top:1px solid #ebeee7}
+.world-context-records article span{font-size:10px;font-weight:700;color:#57765e;overflow-wrap:anywhere}
+.world-context-records article p{margin-top:3px;white-space:pre-wrap}
+.world-context-records>p{margin-top:6px}
+.world-context-groups{margin-top:10px;border-top:1px solid #e5eadf;padding-top:8px}
+.world-context-groups>strong{font-size:10px;font-weight:700;color:#476c50}
+.world-context-group-list{display:grid;max-height:132px;overflow:auto;margin-top:5px;scrollbar-width:thin}
+.world-context-group-list button{display:grid;grid-template-columns:minmax(0,1fr) auto 13px;align-items:center;gap:5px;min-height:26px;width:100%;padding:4px 2px;border:0;border-top:1px solid #edf0e9;background:transparent;color:#416b50;text-align:left;font-size:10px;cursor:pointer}
+.world-context-group-list button:hover,.world-context-group-list button:focus-visible{background:#e8efe2}
+.world-context-group-list button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.world-context-group-list button small{color:#7e907e;font-size:9px;white-space:nowrap}
+.world-context-close{position:absolute;top:6px;right:6px;width:26px;height:26px;display:grid;place-items:center;border:0;border-radius:4px;background:transparent;color:#62765d}
+.world-context-close:hover{background:#e9eee0}
+.world-context-group{display:flex;align-items:center;justify-content:space-between;gap:4px;width:100%;min-height:27px;margin-top:8px;padding:5px 1px 0;border:0;border-top:1px solid #e6ebe1;background:transparent;color:#316f4c;text-align:left;font-size:11px;font-weight:700}
+.world-context-group:hover{color:#185735}
+.world-context-expand{display:flex;align-items:center;justify-content:space-between;gap:4px;width:100%;min-height:27px;margin-top:8px;padding:5px 1px 0;border:0;border-top:1px solid #e6ebe1;background:transparent;color:#386a4b;text-align:left;font-size:11px;font-weight:700}
+.world-context-expand:hover{color:#1e5d3c}
+.world-group-controls{position:absolute;z-index:2;left:calc(12px + env(safe-area-inset-left));bottom:calc(12px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:7px;padding:3px;border:1px solid #fff9;border-radius:5px;background:#fffdf0e8;box-shadow:0 5px 18px #34562d25;backdrop-filter:blur(10px)}
+.world-group-controls button{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-height:27px;padding:3px 6px;border:0;border-radius:3px;background:transparent;color:#365a3f;font-size:11px;font-weight:700}
+.world-group-controls button:hover:not(:disabled){background:#e8efe2}
+.world-group-pages{display:flex;align-items:center;gap:1px;border-left:1px solid #dce6d6;padding-left:4px;color:#758774;font-size:10px}
+.world-group-pages button{width:27px;padding:2px}
+@media(max-width:620px){.world-stage{background-image:url('/assets/environments/collaboration-meadow-mobile.webp')}.world-stage canvas{width:min(100%,75dvh)}.world-context{width:min(230px,calc(100% - 20px));padding:11px 12px 8px}.world-context h2{font-size:12px}.world-context-scroll{max-height:170px}}

@@ -1,0 +1,14 @@
+{
+  "status": "example_only",
+  "mission_id": "first-rsi-mission",
+  "summary": "两个研究节点完成了独立资料检查；系统保留了不同解释和下一项检查。",
+  "evidence": [
+    {
+      "kind": "handoff",
+      "ref": "handoff:task-example-001",
+      "verified": false
+    }
+  ],
+  "next_test": "在相同输入和冻结协议下运行一个最小对照。",
+  "note": "这是文档夹具，用于说明结果结构，不是模型输出，也不是科研结论。"
+}

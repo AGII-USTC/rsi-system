@@ -1,0 +1,39 @@
+{
+  "runtime-harness-smoke-v1": {
+    "dataset_version": "metaworld-reach-seeded-v1",
+    "evaluator_id": "runtime-harness-summary-v1"
+  },
+  "residual-memory-dev-v1": {
+    "dataset_version": "residual-memory-public-dev-v1",
+    "evaluator_id": "prequential-residual-diagnostic-v1",
+    "fixed_config": {
+      "data_dir": "",
+      "model_path": ""
+    }
+  },
+  "runtime-harness-period-v1": {
+    "dataset_version": "metaworld-reach-seed0-steps64-v1",
+    "evaluator_id": "period-demo-waypoint-budget-v1",
+    "candidate_mode": "configuration_only",
+    "evaluation": {
+      "seed": 0,
+      "steps": 64,
+      "latency_ticks": 4,
+      "chunk_ticks": 16,
+      "monitor": "none",
+      "switch_tick": -1,
+      "allowed_period_ticks": [
+        4,
+        6,
+        8,
+        12,
+        16,
+        24
+      ],
+      "baseline_period_ticks": 12,
+      "feasibility": "waypoint_distance_m <= 0.05",
+      "objective": "Among feasible candidates minimize requests; break ties by waypoint_distance_m",
+      "claim_scope": "Single-seed waypoint scheduling diagnostic; not task success or Memory adaptation"
+    }
+  }
+}

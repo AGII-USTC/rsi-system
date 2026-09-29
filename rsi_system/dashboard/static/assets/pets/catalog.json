@@ -1,0 +1,152 @@
+[
+  {
+    "id": "kurisu",
+    "name": "Kurisu",
+    "creator": "CUBlaster",
+    "source": "https://codex-pets.net/#/pets/kurisu",
+    "download": "https://codex-pets.net/api/pets/kurisu/download?v=1777791498929",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.webp"
+    ],
+    "sha256": "72cbb81e618d3b031fac9cb24199f234080e00c7f6e2b6c930285510abf28cb0"
+  },
+  {
+    "id": "violet",
+    "name": "Violet",
+    "creator": "Lazenca",
+    "source": "https://codex-pets.net/#/pets/violet",
+    "download": "https://codex-pets.net/api/pets/violet/download?v=1777735787163",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.webp"
+    ],
+    "sha256": "80a750a3f3fe76ecdf15aadd0cfd6084c16e5d0ef2b4e5db06e960ef92a13d1d"
+  },
+  {
+    "id": "eren",
+    "name": "Eren",
+    "creator": "Ash-Sw",
+    "source": "https://codex-pets.net/#/pets/eren",
+    "download": "https://codex-pets.net/api/pets/eren/download?v=1778004856677",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.webp"
+    ],
+    "sha256": "4f6cdc0d5508045e7494d433d5e36f72433f5c0ea0a67a0a3db34702aea98e0f"
+  },
+  {
+    "id": "liuying-firefly-pixel",
+    "name": "流萤",
+    "creator": "awaxiaoyu",
+    "source": "https://codex-pets.net/#/pets/liuying-firefly-pixel",
+    "download": "https://codex-pets.net/assets/pets/v/1778306538910/liuying-firefly-pixel/spritesheet.webp",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.webp"
+    ],
+    "sha256": "01ea2eb89d21834bf2cd9f3b0c056a24a015f420768ecdf37d576f28de406c52"
+  },
+  {
+    "id": "guga",
+    "name": "咕嘎",
+    "creator": "CIRCUS",
+    "source": "https://codex-pets.net/#/pets/guga",
+    "download": "https://codex-pets.net/api/pets/guga/download?v=1777721201758",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.webp"
+    ],
+    "sha256": "1b61ea2af98717b9ebe55beb4c6b820b89e9c42d4fdfeca21cf63ed3ad4e38da"
+  },
+  {
+    "id": "nezu",
+    "name": "Nezuko",
+    "creator": "dc",
+    "source": "https://codex-pets.net/#/pets/nezu",
+    "download": "https://codex-pets.net/api/pets/nezu/download?v=1784527415972",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.webp"
+    ],
+    "sha256": "4a3b86b6692e7602e31e879d8f6e94275d211c722486ac8d6f0ffb2eb8b29fd8"
+  },
+  {
+    "id": "bocchi",
+    "name": "bocchi",
+    "creator": "tune",
+    "source": "https://codex-pets.net/#/pets/bocchi",
+    "download": "https://codex-pets.net/api/pets/bocchi/download?v=1777759994615",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.webp"
+    ],
+    "sha256": "97f1468f077cb41ca1fa1af3c658a163f85d8a051e116124495628cf6d8c147d"
+  },
+  {
+    "id": "feibi",
+    "name": "菲比",
+    "creator": "vanfff",
+    "source": "https://codex-pets.net/#/pets/feibi",
+    "download": "https://codex-pets.net/assets/pets/v/1777995788780/feibi/spritesheet.webp",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.webp"
+    ],
+    "sha256": "a9557926850b37c2b877c8777896366435c6b190f77876dff7d0ca296edca04a"
+  },
+  {
+    "id": "generated-nuan",
+    "name": "暖暖",
+    "creator": "Codex imagegen",
+    "source": "local://rsi-dashboard/generated-nuan",
+    "version": 1,
+    "files": [
+      "pet.json",
+      "spritesheet.png",
+      "spritesheet.webp"
+    ],
+    "sha256": "58fdf6e939d1f47e2ee6822f8a88a5cd7f88968ed23afee285b11e34441387bb",
+    "notes": "Soft-clay office collaborator; generated base plus independently generated transparent action poses, deterministically assembled for the current 8x9 renderer.",
+    "runtime": "spritesheet.png (lossless alpha)",
+    "runtime_sha256": "6a427c8c8fe4295135f2b8b0341342fdfbcb1c78ae266cd8b9dde8ac94fceabf"
+  },
+  {
+    "id": "generated-product-manager",
+    "name": "小暖·产品经理",
+    "creator": "Codex imagegen",
+    "source": "local://rsi-dashboard/profession-pets",
+    "version": 1,
+    "files": ["pet.json", "spritesheet.png", "spritesheet.webp"],
+    "sha256": "3e41de8466a837db691029e65ba8227a0a41406a3c502023cffd52851673736f",
+    "notes": "Warm soft-clay product manager with clipboard, communication, laptop and walking poses."
+  },
+  {
+    "id": "generated-student",
+    "name": "书书·学生",
+    "creator": "Codex imagegen",
+    "source": "local://rsi-dashboard/profession-pets",
+    "version": 1,
+    "files": ["pet.json", "spritesheet.png", "spritesheet.webp"],
+    "sha256": "84ae6d67dee22a5df3be3cb270726b0096ce6cd902495929e164b153217002f0",
+    "notes": "Warm soft-clay student with notebook, backpack, question and study poses."
+  },
+  {
+    "id": "generated-researcher",
+    "name": "探探·研究员",
+    "creator": "Codex imagegen",
+    "source": "local://rsi-dashboard/profession-pets",
+    "version": 1,
+    "files": ["pet.json", "spritesheet.png", "spritesheet.webp"],
+    "sha256": "46a52cff2e07afbedea1d10ecc15d358ac543a28d12739f702aac0370f897ccd",
+    "notes": "Warm soft-clay otter researcher with notebook, magnifier, satchel and fieldwork poses."
+  }
+]

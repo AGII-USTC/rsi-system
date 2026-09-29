@@ -1,0 +1,19 @@
+{
+  "id": "generated-student",
+  "displayName": "书书",
+  "description": "A curious soft-clay student with a notebook and backpack, showing study and question gestures.",
+  "spriteVersionNumber": 1,
+  "spritesheetPath": "spritesheet.png",
+  "source": "Generated with built-in imagegen: canonical profession base plus an independently generated 2x4 action sheet; assembled into a renderer-compatible 8x9 atlas.",
+  "states": {
+    "idle": "breathing from canonical base",
+    "running-right": "independently generated alternating steps",
+    "running-left": "mirrored coherent step cadence",
+    "waving": "profession-specific greeting gesture",
+    "jumping": "body-only celebratory lift",
+    "failed": "quiet reaction pose",
+    "waiting": "expectant pose",
+    "running": "profession-specific active work gesture",
+    "review": "profession-specific reading/review gesture"
+  }
+}

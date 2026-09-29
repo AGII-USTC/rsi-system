@@ -1,0 +1,19 @@
+{
+  "id": "generated-nuan",
+  "displayName": "暖暖",
+  "description": "A gentle soft-clay office collaborator with clear work and communication gestures.",
+  "spriteVersionNumber": 1,
+  "spritesheetPath": "spritesheet.png",
+  "source": "Generated with built-in imagegen from a canonical soft-clay reference; standard 8x9 atlas assembled deterministically.",
+  "states": {
+    "idle": "breathing/blink",
+    "running-right": "restrained gait",
+    "running-left": "mirrored gait",
+    "waving": "raised-hand greeting",
+    "jumping": "body-only arc",
+    "failed": "tired/rest reaction",
+    "waiting": "approval pose",
+    "running": "laptop work",
+    "review": "notebook review"
+  }
+}

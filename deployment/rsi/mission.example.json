@@ -1,0 +1,23 @@
+{
+  "mission_id": "my-first-mission",
+  "objective": "Compare plausible answers to a user-defined research question and record source-linked findings.",
+  "background": "Replace this example with the question, project context, and completion criteria for your deployment.",
+  "known_evidence": [],
+  "resources": {
+    "exploration_review": true,
+    "max_agent_tasks": 12,
+    "max_runs": 2,
+    "max_seconds_per_run": 120,
+    "max_parallel_agents": 2,
+    "max_parallel_runs": 1
+  },
+  "stop_conditions": [
+    "A source-linked comparison and open verification questions are recorded",
+    "The task budget is exhausted or required input is unavailable"
+  ],
+  "authorization": {
+    "allow_code_candidates": false,
+    "allow_server_simulation": false
+  },
+  "mode": "open"
+}

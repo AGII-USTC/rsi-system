@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+cd "$HOME/rsi_system"
+exec "$HOME/rsi_system/.venv/bin/python" -m rsi_system.core.runtime_cli "$@"

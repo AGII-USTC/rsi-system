@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the Embodied RSI experiment queue
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=30s
+AccuracySec=2s
+Unit=embodied-rsi-worker.service
+
+[Install]
+WantedBy=timers.target

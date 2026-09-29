@@ -1,0 +1,10 @@
+{
+  "models": {
+    "coordinator": {"provider": "provider-name", "model": "model-id"},
+    "researcher": {"provider": "provider-name", "model": "model-id"}
+  },
+  "model_routing": {
+    "default": {"provider": "provider-name", "model": "model-id"}
+  },
+  "thinking": "high"
+}

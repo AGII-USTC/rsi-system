@@ -1,0 +1,10 @@
+[Unit]
+Description=Keep RSI collaborator queue advancing
+
+[Timer]
+OnBootSec=10
+OnUnitInactiveSec=10
+Unit=embodied-rsi-collaborators.service
+
+[Install]
+WantedBy=timers.target

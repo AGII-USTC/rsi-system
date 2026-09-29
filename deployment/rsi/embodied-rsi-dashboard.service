@@ -1,0 +1,15 @@
+[Unit]
+Description=Loopback-only RSI research dashboard
+
+[Service]
+Type=simple
+WorkingDirectory=%h/rsi_system
+ExecStart=%h/rsi_system/.venv/bin/python -m rsi_system.dashboard.server --root %h/rsi_system --port 8765
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

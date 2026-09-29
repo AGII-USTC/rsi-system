@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Runtime state and task outputs
+.rsi/
+*.sqlite3
+*.sqlite
+*.db
+*.log
+state/
+runs/
+outputs/
+
+# Local credentials and machine-specific configuration
+.env
+.env.*
+config/private/
+deployment/private/
+*.key
+models.json
+
+# Frontend dependencies and build output
+dashboard/web/node_modules/
+dashboard/web/dist/
+dashboard/web/.vite/

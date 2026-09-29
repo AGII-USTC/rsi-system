@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "objective": "Investigate a user-defined research question and record source-linked findings.",
+  "pi_executable": "pi",
+  "python": "python",
+  "models": {},
+  "model_routing": {},
+  "thinking": "high",
+  "max_cycles": 5,
+  "max_repairs": 2,
+  "max_agent_calls_per_day": 30,
+  "runtime_max_agent_calls_per_day": 30,
+  "runtime_max_parallel_agents": 2,
+  "runtime_max_parallel_runs": 1,
+  "agent_timeout_seconds": 600,
+  "sandbox": true
+}

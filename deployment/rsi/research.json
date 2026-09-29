@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "objective": "Investigate the user-defined question, compare plausible explanations and available evidence, and record uncertain findings with their sources. Work within the Mission authorization, resources, and stop conditions.",
+  "pi_executable": "pi",
+  "python": "python",
+  "models": {},
+  "model_routing": {},
+  "thinking": "xhigh",
+  "max_cycles": 5,
+  "max_repairs": 2,
+  "max_agent_calls_per_day": 30,
+  "runtime_max_agent_calls_per_day": 30,
+  "runtime_max_parallel_agents": 3,
+  "runtime_max_parallel_runs": 1,
+  "agent_timeout_seconds": 600,
+  "sandbox": true
+}

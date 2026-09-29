@@ -1,0 +1,22 @@
+{
+  "mission_id": "first-rsi-mission",
+  "objective": "比较两个可行解释，记录证据和下一项能区分它们的检查。",
+  "background": "这是 RSI 的最小工程示例，不代表真实科研结论。",
+  "known_evidence": [],
+  "resources": {
+    "exploration_review": true,
+    "max_agent_tasks": 8,
+    "max_runs": 1,
+    "max_seconds_per_run": 120,
+    "max_parallel_agents": 2,
+    "max_parallel_runs": 1
+  },
+  "stop_conditions": [
+    "留下带来源的比较、未决问题和下一项检查"
+  ],
+  "authorization": {
+    "allow_code_candidates": false,
+    "allow_server_simulation": false
+  },
+  "mode": "open"
+}

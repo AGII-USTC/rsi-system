@@ -1,0 +1,24 @@
+[Unit]
+Description=Embodied RSI research, coding and review orchestration
+Requires=embodied-rsi-secret-service.service
+After=embodied-rsi-secret-service.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/rsi_system
+ExecStart=%h/rsi_system/.venv/bin/python -m rsi_system.core research-tick --quiet-empty
+Environment=PYTHONUNBUFFERED=1
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=PI_TELEMETRY=0
+EnvironmentFile=-%h/.config/rsi/agent.env
+Nice=10
+CPUQuota=100%
+MemoryMax=3G
+TasksMax=128
+TimeoutStartSec=32min
+TimeoutStopSec=10s
+KillMode=control-group
+NoNewPrivileges=true
+UMask=0077

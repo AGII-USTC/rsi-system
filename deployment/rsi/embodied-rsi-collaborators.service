@@ -1,0 +1,10 @@
+[Unit]
+Description=RSI parallel collaborator workers
+
+[Service]
+Type=simple
+WorkingDirectory=%h/rsi_system
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/rsi_system/.venv/bin/python -m rsi_system.core.runtime_cli work --follow
+Restart=on-failure
+RestartSec=5

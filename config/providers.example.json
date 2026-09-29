@@ -1,0 +1,10 @@
+{
+  "providers": {
+    "aihub": {
+      "baseUrl": "https://aihub.top/v1",
+      "api": "openai-responses",
+      "apiKey": "!cat ~/.config/rsi/keys/aihub.key",
+      "models": []
+    }
+  }
+}

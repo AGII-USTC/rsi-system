@@ -1,0 +1,1 @@
+"""Local RSI collaboration dashboard."""

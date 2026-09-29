@@ -1,0 +1,104 @@
+.scene-wrap .react-flow__node.react-flow__node-agent {
+  width: 256px;
+}
+
+.scene-wrap .agent-node {
+  width: 256px;
+  height: 158px;
+  gap: 5px;
+  padding: 8px 12px 8px 5px;
+  background: #fffefa;
+  border-color: #dce7dc;
+  box-shadow: 0 7px 19px rgb(48 72 56 / 9%);
+}
+
+.scene-wrap .agent-node.is-running { border-color: #b3d1bf; }
+.scene-wrap .agent-node.is-failed { border-color: #e4bab0; }
+
+.graph-person {
+  --role-disc: #dce9dc;
+  --role-ring: #b6cdb7;
+  position: relative;
+  display: block;
+  flex: 0 0 96px;
+  width: 96px;
+  height: 140px;
+  isolation: isolate;
+}
+
+.graph-role-researcher { --role-disc: #e0eaf0; --role-ring: #adc8d2; }
+.graph-role-hypothesis { --role-disc: #e9e4ee; --role-ring: #c8b8d2; }
+.graph-role-coder { --role-disc: #f2e9d9; --role-ring: #ddc69f; }
+.graph-role-critic, .graph-role-reviewer { --role-disc: #f1e4e1; --role-ring: #d9bcb5; }
+.graph-role-analyzer { --role-disc: #e0eee9; --role-ring: #afd1c4; }
+.graph-role-runner { --role-disc: #e9ebdd; --role-ring: #c9cfac; }
+
+.graph-person-disc {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 3px;
+  height: 23px;
+  border: 1px solid var(--role-ring);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 45% 30%, #fffefa, var(--role-disc) 78%);
+  box-shadow: 0 4px 8px rgb(65 80 63 / 9%);
+}
+
+.graph-person-shadow {
+  position: absolute;
+  z-index: 1;
+  left: 27px;
+  bottom: 12px;
+  width: 43px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgb(55 69 54 / 20%);
+  filter: blur(3px);
+}
+
+.graph-pet {
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  bottom: 9px;
+  display: block;
+  width: 96px;
+  height: 104px;
+  background-size: 768px 936px;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  image-rendering: pixelated;
+}
+
+.graph-person-live .graph-pet { animation: graph-pet-six 2s steps(6) infinite; }
+.graph-person-active .graph-pet { background-position-y: -728px; animation-duration: 1.2s; }
+.graph-person-waiting .graph-pet { background-position-y: -624px; animation-duration: 2s; }
+.graph-person-failed .graph-pet { background-position-y: -520px; }
+.graph-person-live.graph-person-failed .graph-pet { animation: graph-pet-eight 1.6s steps(8) infinite; }
+@keyframes graph-pet-six { to { background-position-x: -576px; } }
+@keyframes graph-pet-eight { to { background-position-x: -768px; } }
+
+.scene-wrap .agent-node-copy { gap: 7px; }
+.scene-wrap .agent-node-type {
+  align-self: flex-start;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: #eef4ec;
+  color: #66816d;
+  font-size: 10px;
+  line-height: 1;
+}
+.scene-wrap .agent-node-copy strong { font-size: 12px; line-height: 1.4; -webkit-line-clamp: 3; }
+.scene-wrap .agent-node-meta { font-size: 10px; gap: 5px; }
+.scene-wrap .task-suffix { font-size: 9px; }
+.scene-wrap .status-dot { width: 7px; height: 7px; }
+.scene-empty .scene-empty-figure { display: block; height: 140px; }
+
+@media (max-width: 620px) {
+  .scene-wrap.scene-wrap { height: 1120px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-pet { animation: none !important; }
+}

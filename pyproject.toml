@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rsi-system"
+version = "0.1.0"
+description = "Standalone RSI control plane and local dashboard"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+rsi-core = "rsi_system.core.cli:main"
+rsi-runtime = "rsi_system.core.runtime_cli:main"
+rsi-dashboard = "rsi_system.dashboard.server:main"
+
+[tool.setuptools.packages.find]
+include = ["rsi_system*"]
+
+[tool.setuptools.package-data]
+"rsi_system.dashboard" = ["static/**/*", "web/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["rsi_system/core/tests", "rsi_system/dashboard/tests"]
+addopts = "-q"
