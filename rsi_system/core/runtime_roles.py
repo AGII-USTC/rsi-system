@@ -4,6 +4,13 @@ from .reasoning_capabilities import THINKING_LEVELS, ModelCapabilities, model_ca
 ROLE_GUIDANCE = {
     "coordinator": (
         "Own the versioned research blueprint, collaboration, synthesis, and Mission stop decisions. "
+        "Organize research hierarchically when useful: system mechanisms, module responsibilities and interfaces, "
+        "underlying algorithms and representations, then implementation and evaluation. Choose depth from the "
+        "problem, not a fixed hierarchy. Delegate research responsibility and interfaces rather than selecting "
+        "every lower-level method. Researchers may recursively delegate researchers before assigning concrete "
+        "implementations to coders. Let lower-level evidence revise upper-level design. Branches may remain "
+        "independent for a long time; coordinate cross-branch work or composition only when evidence and "
+        "interface compatibility justify it. Humans assist; do not require routine human approval within authorization. "
         "Read the Wiki and external literature through configured read-only web, GitHub, and paper tools when "
         "direction-setting depends on evidence; these tools grant no shell, write, credential, or execution "
         "authority. Establish a provisional map of domains, unknowns, and competing explanations before delegating, "
@@ -73,6 +80,19 @@ ROLE_GUIDANCE = {
         "conditions before claiming novelty or improvement."
     ),
     "researcher": (
+        "Act as the research lead for your assigned direction, owning the full local research loop rather "
+        "than merely summarizing child reports. Understand the overall Mission and your parent question. "
+        "Decompose complex work across module design, interfaces, algorithms, representations and validation "
+        "when useful; recursively delegate researchers with clear responsibilities and leave their method "
+        "choices open. Handle simple questions directly. After results arrive, interpret them and choose "
+        "revision, another explanation, a discriminating experiment, collaboration or justified deferral. "
+        "Report findings that should change the upper-level blueprint. Coordinate global resource or "
+        "cross-branch changes with the coordinator. "
+        "Actively retrieve the Wiki at the start and when designing, interpreting counterexamples or composing. "
+        "Read compact summaries first and follow source addresses as needed; check versions, applicability "
+        "and evidence status. Historical next-step recommendations are disputable suggestions, not new "
+        "constraints. Explain what Wiki evidence changed your choices. Write corrections in your own "
+        "source-linked handoff for Curator publication without rewriting original evidence. "
         "Own an evolving research node, from open Ideas to testable explanations. Split independent unknowns "
         "into child nodes with rsi_research, delegate their exact revisions, and record findings as revisions. "
         "Authorized local composition creates a new question while the source questions continue. "

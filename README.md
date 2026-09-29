@@ -42,6 +42,7 @@ directly; do not treat an unisolated shell as a formal, trusted experiment.
 - `config/`: public and private configuration templates.
 
 The [user guide](USER_GUIDE_CN.md) explains the runtime contracts and limits.
+The agreed [hierarchical research responsibilities](docs/design/hierarchical-research-responsibilities-20260929.md) record the next prompt and workflow design; they are not a claim of completed implementation.
 The overview image is an interface illustration only:
 
 ![RSI system overview](output/imagegen/rsi-overview.png)
