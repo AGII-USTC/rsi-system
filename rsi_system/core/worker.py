@@ -133,14 +133,15 @@ def _run_claimed(store: ExperimentStore, record: dict[str, Any], repo_root: Path
                                        stdout=stdout, stderr=stderr, start_new_session=True)
             result.update({"process_pid": process.pid, "process_start_token": _linux_start_token(process.pid)})
             _write_json(run_dir / "run_record.json", result)
-            deadline = time.monotonic() + max_seconds(record)
+            seconds = max_seconds(record)
+            deadline = time.monotonic() + seconds if seconds is not None else None
             while process.poll() is None:
                 current = store.get(record["experiment_id"])
                 if current is None or current["status"] != "running":
                     result["status"] = "cancelled"
                     _stop_group(process)
                     break
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     result["status"] = "failed"
                     result["error"] = "max_seconds exceeded"
                     _stop_group(process)

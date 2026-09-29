@@ -32,9 +32,9 @@ def task_lease_heartbeat(coordinator, task):
     config = coordinator._config()
     seconds = config.get("agent_timeout_seconds")
     if task["role"] == "runner":
-        # Includes bounded preparation/receipt publication time. Runner itself
-        # continues enforcing the separately frozen experiment time limit.
-        seconds = max(seconds or 0, 1800)
+        # Runner enforces its own frozen experiment time limit, if any.
+        # Keep its ownership alive during execution and receipt publication.
+        seconds = None
     deadline = (datetime.now(timezone.utc) + timedelta(seconds=seconds + 180)
                 if seconds is not None else None)
     stopped = Event()

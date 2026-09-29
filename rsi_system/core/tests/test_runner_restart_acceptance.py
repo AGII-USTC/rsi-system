@@ -89,12 +89,19 @@ def test_receipt_survives_crash_before_intent_and_database_update(tmp_path, monk
     directory = runtime.runtime_root / 'runs' / exploration.exploration_run_id(task['task_id'])
     assert (directory / 'output/result.txt').read_text() == 'measured'
     receipt = (directory / 'run_record.json').read_bytes()
+    frozen_input = (directory / 'input.json').read_bytes()
+    with RuntimeStore(runtime.store_path) as store:
+        payload = store.mission('m')['payload']
+        payload['resources']['max_seconds_per_run'] = None
+        store.db.execute('UPDATE missions SET payload_json=? WHERE mission_id=?', (json.dumps(payload), 'm'))
+        store.db.commit()
     expire(runtime)
     monkeypatch.setattr(exploration, 'mark_receipt_ready', real)
     monkeypatch.setattr(exploration, 'mark_started', lambda *a, **k: pytest.fail('must not relaunch'))
     result = runtime.tick()
     assert result['status'] == 'completed', result
     assert (directory / 'run_record.json').read_bytes() == receipt
+    assert (directory / 'input.json').read_bytes() == frozen_input
     with RuntimeStore(runtime.store_path) as store:
         assert len(store.list_runs('m')) == 1
         assert store.list_runs('m')[0]['status'] == 'completed'

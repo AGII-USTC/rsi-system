@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import shutil
 import sys
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +23,8 @@ def context(kwargs):
 
 @pytest.mark.parametrize("exit_code", [0, 2])
 @pytest.mark.parametrize("sandbox", [False, True])
-def test_idea_probe_delegates_without_candidate_and_returns_evidence(tmp_path, exit_code, sandbox):
+@pytest.mark.parametrize("seconds", [5, None])
+def test_idea_probe_delegates_without_candidate_and_returns_evidence(tmp_path, exit_code, sandbox, seconds, monkeypatch):
     if sandbox and (sys.platform != "linux" or shutil.which("bwrap") is None):
         pytest.skip("Linux bubblewrap is required")
     runtime = RuntimeCoordinator(project(tmp_path))
@@ -31,7 +34,11 @@ def test_idea_probe_delegates_without_candidate_and_returns_evidence(tmp_path, e
     config_path.write_text(json.dumps(config))
     runtime.start(MissionSpec("m", "test a competing explanation",
                               authorization={"allow_code_candidates": True, "allow_server_simulation": True},
-                              resources={"max_agent_tasks": 6, "max_runs": 1, "max_seconds_per_run": 5}))
+                              resources={"max_agent_tasks": 6, "max_runs": 1, "max_seconds_per_run": seconds}))
+    if seconds is None:
+        ticks = iter(range(0, 10000000, 10000))
+        monkeypatch.setattr("rsi_system.core.runtime_exploration.time", SimpleNamespace(
+            time=time.time, monotonic=lambda: next(ticks), sleep=time.sleep))
     with RuntimeStore(runtime.store_path) as store:
         store.create_task("m", "researcher", "explore an Idea", "open question", delegate_budget=4)
     seen = []
@@ -89,6 +96,7 @@ def test_idea_probe_delegates_without_candidate_and_returns_evidence(tmp_path, e
         run = store.list_runs("m")[0]
         assert run["candidate_id"] is None and run["idea_ref"] == "idea-a"
         assert run["kind"] == "exploration"
+        assert run["evidence"]["artifact_diagnostics"]["limits"]["max_seconds"] == seconds
         assert len([task for task in store.list_tasks("m") if task["role"] == "runner"]) == 1
         assert not [task for task in store.list_tasks("m") if task["role"] in {"analyzer", "critic"}]
         assert run["evidence"]["execution_status"] == ("completed" if exit_code == 0 else "failed_during_program")

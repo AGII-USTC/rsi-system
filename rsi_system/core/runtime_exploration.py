@@ -26,7 +26,7 @@ MAX_LOG_BYTES = 4_000_000
 
 
 def exploration_limits(max_seconds=120):
-    return {"max_seconds": min(max_seconds, 120), "max_output_files": MAX_OUTPUT_FILES,
+    return {"max_seconds": min(max_seconds, 120) if max_seconds is not None else None, "max_output_files": MAX_OUTPUT_FILES,
             "max_artifact_bytes": MAX_ARTIFACT_BYTES, "max_total_bytes_including_logs": MAX_TOTAL_BYTES,
             "max_combined_log_bytes": MAX_LOG_BYTES}
 
@@ -218,6 +218,13 @@ def execute_exploration(coordinator, store, mission, task):
               "source_commit": source_commit, "source_sha256": sha256_tree(source_directory),
               "inputs_sha256": sha256_tree(inputs_directory), "bootstrap_sha256": bootstrap_sha256,
               "source_manifest_sha256": hashlib.sha256(source_manifest.read_bytes()).hexdigest()}
+    if frozen.exists():
+        # Existing receipts and intents retain their original identity.
+        if "resource_budget" in saved:
+            pinned["resource_budget"] = saved["resource_budget"]
+    else:
+        pinned["resource_budget"] = {"max_seconds": exploration_limits(
+            mission["payload"]["resources"].get("max_seconds_per_run", 120))["max_seconds"]}
     if task["scope"].get("research_node_id"):
         pinned.update({"research_node": {"node_id": task["scope"]["research_node_id"],
                                          "revision": task["scope"]["research_revision"]},
@@ -295,7 +302,7 @@ def execute_exploration(coordinator, store, mission, task):
     else:
         if not recovery["safe_to_launch"]:
             raise ValueError("Runner execution state does not authorize launch")
-        max_seconds = min(mission["payload"]["resources"].get("max_seconds_per_run", 120), 120)
+        max_seconds = pinned.get("resource_budget", {"max_seconds": 120})["max_seconds"]
         output = directory / "output"
         output.mkdir(exist_ok=True)
         stdout_path, stderr_path = directory / "stdout.log", directory / "stderr.log"
@@ -324,9 +331,9 @@ def execute_exploration(coordinator, store, mission, task):
             else:
                 mark_started(directory, pid=process.pid,
                              process_start_token=_linux_start_token(process.pid))
-                deadline = time.monotonic() + max_seconds
+                deadline = time.monotonic() + max_seconds if max_seconds is not None else None
                 while process.poll() is None:
-                    if time.monotonic() >= deadline:
+                    if deadline is not None and time.monotonic() >= deadline:
                         error = "exploration time budget exhausted"
                         _stop_group(process)
                     elif stdout_path.stat().st_size + stderr_path.stat().st_size > MAX_LOG_BYTES:

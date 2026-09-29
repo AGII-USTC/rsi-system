@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -96,11 +97,12 @@ def test_timeout_kills_subprocess_group_and_preserves_failure(tmp_path):
         assert Path(result["stderr_path"]).is_file()
 
 
-def test_cancellation_stops_running_process(tmp_path):
+@pytest.mark.parametrize("seconds", [10, None])
+def test_cancellation_stops_running_process(tmp_path, seconds):
     repo = fixture_repo(tmp_path)
     db = tmp_path / "state.sqlite3"
     with ExperimentStore(db) as controller:
-        queued(controller, seed=2, max_seconds=10)
+        queued(controller, seed=2, max_seconds=seconds)
         output = {}
         def worker():
             with ExperimentStore(db) as store:
@@ -115,6 +117,18 @@ def test_cancellation_stops_running_process(tmp_path):
         assert not thread.is_alive()
         assert output["result"]["status"] == "cancelled"
         assert controller.get("test-001")["run"]["status"] == "cancelled"
+
+
+def test_unlimited_run_survives_elapsed_clock_and_preserves_null_budget(tmp_path, monkeypatch):
+    repo = fixture_repo(tmp_path)
+    ticks = iter(range(0, 10000000, 10000))
+    monkeypatch.setattr("rsi_system.core.worker.time", SimpleNamespace(
+        time=time.time, monotonic=lambda: next(ticks), sleep=time.sleep))
+    with ExperimentStore(tmp_path / "state.sqlite3") as store:
+        queued(store, max_seconds=None)
+        result = run_once(store, repo, tmp_path / "runs", python=sys.executable)
+        assert result["status"] == "completed", result
+        assert store.get("test-001")["resource_budget"]["max_seconds"] is None
 
 
 def test_restart_marks_orphaned_running_record_interrupted(tmp_path):

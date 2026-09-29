@@ -1,7 +1,31 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from rsi_system.core.runtime import MissionSpec, RuntimeStore
 from rsi_system.core.runtime_lease import renew_execution_lease
+
+
+def test_runner_heartbeat_has_no_secondary_wall_clock_limit(monkeypatch):
+    from rsi_system.core import runtime_lease
+    captured = []
+    class Once:
+        def __init__(self): self.calls = 0
+        def wait(self, _):
+            self.calls += 1
+            return self.calls > 1
+        def set(self): pass
+    class InlineThread:
+        def __init__(self, target, **_): self.target = target
+        def start(self): self.target()
+        def join(self, **_): pass
+    monkeypatch.setattr(runtime_lease, "Event", Once)
+    monkeypatch.setattr(runtime_lease, "Thread", InlineThread)
+    monkeypatch.setattr(runtime_lease, "renew_execution_lease",
+                        lambda *args, **kw: captured.append(kw["deadline"]) or True)
+    coordinator = SimpleNamespace(_config=lambda: {"agent_timeout_seconds": 900}, store_path="unused")
+    with runtime_lease.task_lease_heartbeat(coordinator, {"role": "runner"}):
+        pass
+    assert captured == [None]
 
 
 def test_live_lease_renews_without_claiming_scientific_progress(tmp_path):

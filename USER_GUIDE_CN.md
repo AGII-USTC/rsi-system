@@ -212,6 +212,8 @@ Researcher 或 coordinator 调用 `rsi_research(action="create")` 创建子问�
 
 `agent_timeout_seconds: null` 表示模型 Agent 不设总执行时限，由完成任务、主动停止、故障或其他资源边界结束调用。任务租约继续续期；Runner 的单次实验时限单独设置，不受此项影响。正在执行的调用保留启动时的时限，配置更改在下一次 Agent 调用生效。
 
+Mission 的 `resources.max_seconds_per_run: null` 表示 Runner 不设总执行时限，普通实验与探索探针都支持。新 Run 会记录该值；修改 Mission 不改写已经冻结的实验输入和旧回执。Runner 执行期间持续续期租约，实验次数、并发和产物大小限制仍生效。省略该字段仍使用兼容的有限默认值；取消时限必须明确填写 `null`。
+
 模型供应商的非密钥索引由 Pi 使用；API key 放在私有 key 文件或系统 Secret Service，权限应为 0600。不要把真实 key、私有 URL、token、账号或机器路径提交到仓库。任务授权仍由 Mission 决定：没有 `allow_code_candidates` 时，coder 派发会被拒绝；没有服务器模拟授权时，不应把本地草稿称为服务器实验。
 
 首次安装 Python 包后，在 macOS 或 Windows 也可以启动 Mission、使用节点图、消息、handoff、Wiki 和看板。没有 Linux/bubblewrap 时，核心流程仍然可用，researcher/coder 可以进行普通本地调用，但运行时会把它与隔离 shell 区分开；未经隔离执行的代码不能称为受控 Runner 实验。用户可在 macOS 使用容器运行器或其他隔离执行器，需另行接入和验收。

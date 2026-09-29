@@ -7,7 +7,7 @@
     "exploration_review": true,
     "max_agent_tasks": 12,
     "max_runs": 2,
-    "max_seconds_per_run": 120,
+    "max_seconds_per_run": null,
     "max_parallel_agents": 2,
     "max_parallel_runs": 1
   },

@@ -20,11 +20,13 @@ PERIOD_PROTOCOL = "runtime-harness-period-v1"
 PROTOCOLS = ("runtime-harness-smoke-v1", "residual-memory-dev-v1", PI05_PROTOCOL, PERIOD_PROTOCOL)
 
 
-def max_seconds(record: dict[str, Any]) -> int:
+def max_seconds(record: dict[str, Any]) -> int | None:
     budget = record["resource_budget"]
     if set(budget) != {"max_seconds"}:
         raise ValueError("resource_budget requires only max_seconds")
     value = budget["max_seconds"]
+    if value is None:
+        return None
     if type(value) is not int or not 1 <= value <= 1800:
         raise ValueError("max_seconds must be an integer in [1, 1800]")
     return value
