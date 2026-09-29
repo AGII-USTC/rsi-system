@@ -34,4 +34,18 @@ def load_research_config(root: Path, *, config_dir: Path | None = None) -> dict:
             raise ValueError(f"{key} must be a nonnegative integer")
     if public["runtime_recovery_max_retry_seconds"] < public["runtime_recovery_retry_seconds"]:
         raise ValueError("maximum recovery delay must be at least the initial delay")
+    roots = public.setdefault("external_readonly_roots", [])
+    if not isinstance(roots, list):
+        raise ValueError("external_readonly_roots must be a list")
+    names, paths = set(), []
+    for item in roots:
+        if (not isinstance(item, dict) or set(item) != {"name", "path"} or
+                not isinstance(item["name"], str) or not item["name"].strip() or
+                not isinstance(item["path"], str) or not Path(item["path"]).is_absolute()):
+            raise ValueError("external_readonly_roots entries require a name and absolute path")
+        path = Path(item["path"]).resolve()
+        if item["name"] in names or any(path.is_relative_to(p) or p.is_relative_to(path) for p in paths):
+            raise ValueError("external_readonly_roots must have unique names and non-overlapping paths")
+        names.add(item["name"])
+        paths.append(path)
     return public

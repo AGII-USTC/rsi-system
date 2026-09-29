@@ -725,7 +725,9 @@ class RuntimeCoordinator:
                 return {"status": "completed", "task_id": task["task_id"], "role": task["role"],
                         "run_id": result["run_id"], "mission_id": mission["mission_id"]}
             evidence_manifest = build_evidence_bundle(self.root, store, task, output_dir)
-            external_manifest = build_external_readonly_manifest(task, output_dir)
+            external_manifest = build_external_readonly_manifest(
+                task, output_dir, roots=[(item["name"], item["path"])
+                                        for item in self._config()["external_readonly_roots"]])
             frozen = output_dir / "input.json"
             communication_manifest = None
             if frozen.exists():

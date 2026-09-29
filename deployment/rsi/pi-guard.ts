@@ -38,6 +38,7 @@ export default function (pi: any) {
         throw new Error("Invalid RSI external read-only root");
       externalRoots.push(path);
     }
+    evidence.set(manifestPath, hash(manifestPath));
   }
   const forbidden = new Set([".git", ".pi", ".rsi"]);
   function inside(base: string, path: string): boolean {

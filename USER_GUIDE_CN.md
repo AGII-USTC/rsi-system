@@ -186,6 +186,14 @@ Researcher 或 coordinator 调用 `rsi_research(action="create")` 创建子问�
 
 ## 8. 配置、模型和安全边界
 
+外部研究代码、结果和模型目录通过私有配置中的 `external_readonly_roots` 提供，例如：
+
+```json
+{"external_readonly_roots": [{"name": "research", "path": "/absolute/project/research"}]}
+```
+
+默认列表为空。目录名称必须唯一，路径必须为绝对路径且互不包含；只配置该部署已获授权的目录，不包含凭证和运行时数据库。新任务生成只读资源清单，文件工具可读取清单和对应目录，不能写入；模型权重保留在原处，不复制到任务工作区。配置变化不会改写已冻结任务的清单，新配置在后续工作进程执行新任务时生效。清单记录的是访问范围，不代表目录中的数据已经冻结或实验已经成功；正式 Run 仍须保存自己的输入版本和回执。
+
 公共默认配置是 `deployment/rsi/research.json`。私有覆盖文件为 `~/.config/rsi/research.json`；多套配置可通过 `RSI_CONFIG_DIR=/path/to/private` 隔离。常用字段：
 
 ```json

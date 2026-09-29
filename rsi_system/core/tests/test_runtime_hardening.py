@@ -250,7 +250,7 @@ def test_external_readonly_manifest_is_root_scoped_and_does_not_copy_model(tmp_p
     model.mkdir()
     (research / "paper.md").write_text("source")
     task = {"task_id": "review", "mission_id": "m"}
-    manifest = build_external_readonly_manifest(task, tmp_path / "task",
+    manifest = build_external_readonly_manifest(task, tmp_path / ".rsi" / "task",
                                                 roots=(("research", research), ("model", model)))
     data = json.loads(manifest.read_text())
     assert {item["name"] for item in data["roots"]} == {"research", "model"}
@@ -262,14 +262,63 @@ for (const [toolName,path,blocked] of JSON.parse(process.env.CHECKS)) {
   const response = await hook({toolName,input:{path}});
   if (Boolean(response?.block) !== blocked) throw Error(JSON.stringify({toolName,path,response,blocked}));
 }
+const {appendFileSync} = await import('node:fs');
+appendFileSync(process.env.RSI_EXTERNAL_READONLY_MANIFEST, ' ');
+const tampered = await hook({toolName:'read',input:{path:process.env.RSI_EXTERNAL_READONLY_MANIFEST}});
+if (!tampered?.block) throw Error('Changed external manifest must be rejected');
 '''.replace("GUARD", json.dumps(guard.as_uri()))
     checks = [["read", str(research / "paper.md"), False], ["ls", str(model), False],
               ["write", str(research / "paper.md"), True], ["read", "/etc/passwd", True],
-              ["find", str(research), False], ["edit", str(model), True]]
+              ["find", str(research), False], ["edit", str(model), True],
+              ["read", str(manifest), False], ["write", str(manifest), True],
+              ["edit", str(manifest), True]]
     subprocess.run([node, "--experimental-strip-types", "--input-type=module", "-e", script], check=True,
                    env={**os.environ, "RSI_AGENT_ROOT": str(tmp_path), "RSI_AGENT_ROLE": "researcher",
                         "RSI_EXTERNAL_READONLY_MANIFEST": str(manifest), "CHECKS": json.dumps(checks)},
                    capture_output=True, text=True)
+
+
+def test_configured_external_roots_reach_agent_and_frozen_manifest(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    private = tmp_path / "private"
+    private.mkdir()
+    monkeypatch.setenv("RSI_CONFIG_DIR", str(private))
+    external = tmp_path / "weights"
+    external.mkdir()
+    (external / "checkpoint").write_text("large files stay at source")
+    (private / "research.json").write_text(json.dumps({
+        "external_readonly_roots": [{"name": "weights", "path": str(external)}]}))
+    coordinator = RuntimeCoordinator(root)
+    with RuntimeStore(coordinator.store_path) as store:
+        store.create_mission(MissionSpec("m", "inspect resources"))
+        store.create_task("m", "researcher", "inspect resources", "test")
+    manifests = []
+    def agent(**kwargs):
+        manifest = kwargs["external_manifest"]
+        manifests.append(manifest)
+        assert json.loads(manifest.read_text())["roots"] == [
+            {"name": "weights", "path": str(external), "mode": "read-only"}]
+        assert list(manifest.parent.iterdir()) == [manifest]
+        return {"summary": "resource manifest inspected"}
+    assert coordinator.tick(agent_runner=agent)["status"] == "completed"
+    manifest = manifests[0]
+    original = manifest.read_bytes()
+    identity = json.loads(original)
+    build_external_readonly_manifest(identity, manifest.parent.parent, roots=())
+    assert manifest.read_bytes() == original
+
+
+@pytest.mark.parametrize("roots", ["bad", [{"name": "x", "path": "relative"}],
+    [{"name": "x", "path": "/data"}, {"name": "y", "path": "/data/nested"}],
+    [{"name": "x", "path": "/a"}, {"name": "x", "path": "/b"}]])
+def test_external_root_configuration_rejects_ambiguous_scope(tmp_path, roots):
+    from rsi_system.core.config import load_research_config
+    root = project(tmp_path)
+    private = tmp_path / "private"
+    private.mkdir()
+    (private / "research.json").write_text(json.dumps({"external_readonly_roots": roots}))
+    with pytest.raises(ValueError, match="external_readonly_roots"):
+        load_research_config(root, config_dir=private)
 
 
 def test_daily_calls_include_failed_invocations_and_pin_model_policy(tmp_path):
