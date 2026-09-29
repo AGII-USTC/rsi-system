@@ -289,13 +289,8 @@ class RuntimeCoordinator:
                         last_resume = max((event["version"] for event in store.events(mission["mission_id"])
                                            if event["kind"] == "mission_status" and
                                            event["payload"].get("status") == "active"), default=0)
-                        resume_event = next((event for event in reversed(store.events(mission["mission_id"]))
-                                             if event["version"] == last_resume), None)
-                        resumed_at = resume_event["created_at"] if resume_event else ""
-                        curator_failures = sum(
-                            task["status"] == "failed" and task["role"] == "curator" and
-                            task.get("updated_at", "") > resumed_at
-                            for task in store.list_tasks(mission["mission_id"]))
+                        curator_failures = store.failed_tasks(
+                            mission["mission_id"], since_resume=True, role="curator")
                         if curator_failures >= 2:
                             store.set_mission_status(mission["mission_id"], "paused",
                                 reason="curator failures require reconciliation before curation")
@@ -348,7 +343,7 @@ class RuntimeCoordinator:
                     store.finish_deferred_stop(mission["mission_id"])
                     return {"status": "stopped", "mission_id": mission["mission_id"],
                             "reason": "queued_tasks_completed"}
-                failures = store.failed_tasks(mission["mission_id"])
+                failures = store.failed_tasks(mission["mission_id"], since_resume=True)
                 if failures >= 2:
                     paused = store.set_mission_status(mission["mission_id"], "paused",
                                                        reason="bounded collaborator retry budget exhausted")

@@ -805,9 +805,22 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
         return self.db.execute("SELECT count(*) FROM agent_tasks WHERE mission_id=? AND status IN ('queued','running')",
                                (mission_id,)).fetchone()[0]
 
-    def failed_tasks(self, mission_id: str) -> int:
-        return self.db.execute("SELECT count(*) FROM agent_tasks WHERE mission_id=? AND status='failed'",
-                               (mission_id,)).fetchone()[0]
+    def failed_tasks(self, mission_id: str, *, since_resume: bool = False,
+                     role: str | None = None) -> int:
+        """Keep historical failures; optionally count the current recovery window.
+
+        Claiming a task records the Mission version it actually read. Using
+        that version avoids losing failures in the same second as a resume,
+        and counts tasks queued earlier but executed after the resume.
+        """
+        version = 0
+        if since_resume:
+            version = max((event["version"] for event in self.events(mission_id)
+                           if event["kind"] == "mission_status"
+                           and event["payload"].get("status") == "active"), default=0)
+        return self.db.execute("""SELECT count(*) FROM agent_tasks
+            WHERE mission_id=? AND status='failed' AND input_version>=?
+            AND (? IS NULL OR role=?)""", (mission_id, version, role, role)).fetchone()[0]
 
     def remaining_agent_tasks(self, mission_id: str) -> int | None:
         limit = self.mission(mission_id)["payload"]["resources"].get("max_agent_tasks")
