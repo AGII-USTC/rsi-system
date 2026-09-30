@@ -8,11 +8,12 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import tempfile
 
 from .knowledge import _WIKILINK, _atomic_replace, _frontmatter, _inside, _safe_file, _source_paths
 from .runtime_communications import checked_file, load_manifest, workspace_path
-from .runtime_types import _json
+from .runtime_types import _json, _text
 
 
 _FOLDERS = {"concepts": "concept", "findings": "finding", "experiments": "experiment",
@@ -95,17 +96,24 @@ def pending_record_ids(store, mission_id: str, *, through_version: int | None = 
 
 
 def curator_document_index(root: Path, store, task: dict, *, pending_ids: list[int]) -> str:
-    """Write a compact address book for a curator's source documents.
-
-    The index contains provenance and file addresses, never the contents of the
-    archived responses. This lets the model choose which documents to read while
-    keeping the full immutable records available on disk.
-    """
+    """Index every available record, with document addresses in separate catalogs."""
     root = Path(root).resolve()
     mission_id = task["mission_id"]
+    index = root / ".rsi/runtime/tasks" / task["task_id"] / "evidence/wiki/curation_sources.json"
+    _checked_target(root, index)
+    if index.exists():
+        saved = json.loads(index.read_text(encoding="utf-8"))
+        if (saved.get("mission_id") != mission_id or
+                saved.get("curator_task_id") != task["task_id"] or
+                saved.get("input_version") != task["input_version"]):
+            raise ValueError("curator document index identity mismatch")
+        return str(index)
     events = _record_events(store, mission_id, include_coordinator=True)
     by_id = {event["event_id"]: event for event in events}
     pending = set(pending_ids)
+    if not pending.issubset(by_id):
+        raise ValueError("curator pending source event is missing")
+    index.parent.mkdir(parents=True, exist_ok=True)
 
     def entry(event: dict, *, planning: bool) -> dict:
         source_task = store.task(event["payload"]["task_id"])
@@ -117,39 +125,65 @@ def curator_document_index(root: Path, store, task: dict, *, pending_ids: list[i
         if not provenance.is_file():
             raise ValueError(f"curator archive provenance is missing: {provenance}")
         record = json.loads(provenance.read_text(encoding="utf-8"))
+        if (record.get("mission_id") != mission_id or record.get("task_id") != source_task["task_id"] or
+                record.get("source_event_id") != event["event_id"]):
+            raise ValueError("curator archive provenance identity mismatch")
         documents = []
         for item in record.get("files", []):
             relative = item.get("path")
-            if not isinstance(relative, str):
-                continue
-            address = (root / relative).resolve()
+            if not isinstance(relative, str) or not _HASH.fullmatch(item.get("sha256", "")):
+                raise ValueError("curator archived document address or hash is invalid")
+            address = root / relative
             _checked_target(root, address)
-            documents.append({"address": str(address), "path": relative,
-                              "sha256": item.get("sha256"), "bytes": item.get("bytes"),
+            if not address.is_file() or not _inside(archive_dir, address.resolve()):
+                raise ValueError("curator archived document is missing or outside its record")
+            documents.append({"path": str(address.resolve()),
+                              "sha256": item["sha256"], "bytes": address.stat().st_size,
                               "kind": "response" if relative.endswith("/response.json") else "handoff"})
-        return {"source_event_id": event["event_id"], "event_version": event["version"],
-                "task_id": source_task["task_id"], "role": source_task["role"],
-                "objective": source_task["objective"], "reason": source_task["reason"],
-                "idea_id": source_task["scope"].get("idea_id"),
-                "research_node_id": source_task["scope"].get("research_node_id"),
-                "research_revision": source_task["scope"].get("research_revision"),
-                "planning": planning, "provenance": str(provenance), "documents": documents}
+        identity = {"source_event_id": event["event_id"], "event_version": event["version"],
+                    "task_id": source_task["task_id"], "role": source_task["role"],
+                    "idea_id": source_task["scope"].get("idea_id"),
+                    "research_node_id": source_task["scope"].get("research_node_id"),
+                    "research_revision": source_task["scope"].get("research_revision"),
+                    "planning": planning, "provenance": str(provenance)}
+        catalog = index.parent / "curation_records" / f"{event['event_id']}.json"
+        _checked_target(root, catalog)
+        catalog.parent.mkdir(parents=True, exist_ok=True)
+        encoded = json.dumps({"schema_version": 2, "mission_id": mission_id,
+                              "curator_task_id": task["task_id"], "input_version": task["input_version"],
+                              **identity, "objective": source_task["objective"],
+                              "reason": source_task["reason"], "documents": documents},
+                             ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        raw = encoded.encode("utf-8")
+        if catalog.exists():
+            if catalog.read_bytes() != raw:
+                raise ValueError("curator record catalog changed")
+        else:
+            _atomic_replace(catalog, encoded)
+        return {**identity, "objective_excerpt": source_task["objective"][:240],
+                "documents_manifest": {"path": str(catalog), "sha256": _digest(raw),
+                                       "bytes": len(raw), "document_count": len(documents),
+                                       "mode": "read-only"}}
 
-    records = [entry(by_id[event_id], planning=False) for event_id in pending_ids if event_id in by_id]
+    records = [entry(by_id[event_id], planning=False) for event_id in dict.fromkeys(pending_ids)]
     planning_events = [event for event in events
                        if event["event_id"] not in pending and
+                       event["version"] <= task["input_version"] and
                        event["payload"]["task_id"] != task["task_id"] and
                        (store.task(event["payload"]["task_id"]) or {}).get("role") == "coordinator"]
-    planning = [entry(event, planning=True) for event in planning_events[-4:]]
-    index = root / ".rsi/runtime/tasks" / task["task_id"] / "evidence/wiki/curation_sources.json"
-    _checked_target(root, index)
-    index.parent.mkdir(parents=True, exist_ok=True)
+    planning = [entry(event, planning=True) for event in planning_events]
     _atomic_replace(index, json.dumps({
-        "schema_version": 1,
+        "schema_version": 2,
         "mission_id": mission_id,
         "curator_task_id": task["task_id"],
         "input_version": task["input_version"],
-        "purpose": "Read this address book first, then selectively read source documents before writing Wiki proposals.",
+        "project_root": str(root),
+        "record_count": len(records),
+        "planning_record_count": len(planning),
+        "document_count": sum(item["documents_manifest"]["document_count"] for item in records + planning),
+        "purpose": "Choose records freely, then read their documents_manifest for full source addresses. "
+                   "Objective excerpts are verbatim prefixes; catalogs retain complete objectives. "
+                   "All paths are absolute addresses under project_root.",
         "records": records,
         "planning_records": planning,
         "raw_archive": str(root / "knowledge/raw/runtime-records" / mission_id),
@@ -211,8 +245,245 @@ def _archive_records(root: Path, store, mission_id: str) -> list[str]:
     return archived
 
 
-def _proposal_pages(root: Path, store, task: dict, *, draft: bool = False) -> list[tuple[Path, str, str, str]]:
-    if draft:
+def _submission_directory(root: Path, task: dict) -> Path:
+    return root / ".rsi/runtime/tasks" / task["task_id"] / "curator-submission"
+
+
+def _submission_prompt_hash(root: Path, task: dict) -> str:
+    frozen = root / ".rsi/runtime/tasks" / task["task_id"] / "input.json"
+    _checked_target(root, frozen)
+    if not frozen.is_file():
+        raise ValueError("curator submission requires its frozen task input")
+    saved = json.loads(frozen.read_text(encoding="utf-8"))
+    if (not isinstance(saved, dict) or saved.get("task_id") != task["task_id"] or
+            saved.get("input_version") != task["input_version"] or not isinstance(saved.get("prompt"), str)):
+        raise ValueError("curator submission frozen input identity mismatch")
+    return _digest(saved["prompt"].encode("utf-8"))
+
+
+def _submission_args(root: Path, task: dict, args: dict) -> dict:
+    if not isinstance(args, dict) or set(args) - {"paths", "summary", "decision"}:
+        raise ValueError("curator submission accepts only paths, summary, and decision")
+    paths = args.get("paths")
+    if not isinstance(paths, list) or len(paths) > _MAX_PAGES:
+        raise ValueError("curator submission paths must be a list of at most 20 files")
+    decision = args.get("decision", "publish")
+    if decision not in {"publish", "no_change"}:
+        raise ValueError("curator submission decision must be publish or no_change")
+    summary = _text(args.get("summary"), "curator submission summary")
+    if len(summary.encode("utf-8")) > 16000:
+        raise ValueError("curator submission summary exceeds size limit")
+    if (decision == "publish" and not paths) or (decision == "no_change" and paths):
+        raise ValueError("publish needs selected paths; no_change requires empty paths and an explanation")
+    workspace = root / ".rsi/runtime/tasks" / task["task_id"] / "workspace"
+    normalized = []
+    for value in paths:
+        if not isinstance(value, str) or not value or any(part in {".", ".."} for part in value.split("/")):
+            raise ValueError("invalid curator submission path")
+        path = Path(value)
+        try:
+            relative = path.relative_to(workspace) if path.is_absolute() else path
+        except ValueError as exc:
+            raise ValueError("curator submission path must be inside its own workspace") from exc
+        parts = relative.parts
+        if (len(parts) != 3 or parts[0] != "wiki" or parts[1] not in _FOLDERS or
+                not _SLUG.fullmatch(parts[2])):
+            raise ValueError("curator submission path must be wiki/<section>/<slug>.md")
+        selected = relative.as_posix()
+        if selected in normalized:
+            raise ValueError("duplicate curator submission path")
+        normalized.append(selected)
+    return {"paths": normalized, "summary": summary, "decision": decision}
+
+
+def _validate_submission_plan(root: Path, task: dict, intent: dict, manifest: dict, raw: bytes) -> None:
+    if not isinstance(intent, dict) or intent.get("manifest_sha256") != _digest(raw):
+        raise ValueError("curator submission manifest hash mismatch")
+    if (not isinstance(manifest, dict) or manifest.get("schema_version") != 1 or
+            manifest.get("task_id") != task["task_id"] or manifest.get("mission_id") != task["mission_id"] or
+            manifest.get("input_version") != task["input_version"]):
+        raise ValueError("curator submission identity or input version mismatch")
+    if manifest.get("prompt_sha256") != _submission_prompt_hash(root, task):
+        raise ValueError("curator submission frozen prompt hash mismatch")
+    if task["role"] != "curator":
+        raise ValueError("only curator tasks may load a submission")
+    submission_id = manifest.get("submission_id")
+    body = {key: value for key, value in manifest.items() if key != "submission_id"}
+    if submission_id != _digest(_json(body).encode("utf-8")) or intent.get("manifest") != manifest:
+        raise ValueError("curator submission identity hash mismatch")
+    payload = manifest.get("payload")
+    if not isinstance(payload, dict) or set(payload) != {"summary", "decision"}:
+        raise ValueError("curator submission payload is invalid")
+    normalized = _submission_args(root, task, {"paths": manifest.get("paths"), **payload})
+    request_hash = _digest(_json(normalized).encode("utf-8"))
+    if manifest.get("request_sha256") != request_hash or intent.get("request_sha256") != request_hash:
+        raise ValueError("curator submission request hash mismatch")
+    files = manifest.get("files")
+    if not isinstance(files, list) or len(files) != len(normalized["paths"]):
+        raise ValueError("curator submission files are invalid")
+    for item, relative in zip(files, normalized["paths"]):
+        if (not isinstance(item, dict) or item.get("path") != relative or
+                item.get("snapshot_path") != f"snapshots/{relative}" or
+                not isinstance(item.get("sha256"), str) or not _HASH.fullmatch(item["sha256"])):
+            raise ValueError("curator submission snapshot address or hash is invalid")
+        if type(item.get("bytes")) is not int or not 0 <= item["bytes"] <= 256_000:
+            raise ValueError("curator submission snapshot size is invalid")
+    source_ids = manifest.get("source_event_ids")
+    if (not isinstance(source_ids, list) or any(type(value) is not int or value < 1 for value in source_ids) or
+            source_ids != sorted(set(source_ids)) or (payload["decision"] == "no_change" and source_ids)):
+        raise ValueError("curator submission source event IDs are invalid")
+
+
+def _submission_manifest(root: Path, task: dict) -> tuple[Path, dict] | None:
+    directory = _submission_directory(root, task)
+    manifest_path = directory / "manifest.json"
+    _checked_target(root, manifest_path)
+    if not manifest_path.exists():
+        return None
+    intent_path = directory / "intent.json"
+    _checked_target(root, intent_path)
+    if not intent_path.is_file() or not manifest_path.is_file():
+        raise ValueError("curator submission manifest or intent is missing")
+    raw = manifest_path.read_bytes()
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    manifest = json.loads(raw)
+    _validate_submission_plan(root, task, intent, manifest, raw)
+    for item in manifest["files"]:
+        snapshot = directory / item["snapshot_path"]
+        _checked_target(root, snapshot)
+        raw = checked_file(directory, item["snapshot_path"], item["sha256"])
+        if item["bytes"] != len(raw):
+            raise ValueError("curator submission snapshot size mismatch")
+    return manifest_path, manifest
+
+
+def _submission_receipt(manifest_path: Path, manifest: dict) -> dict:
+    return {"status": "accepted", "payload": manifest["payload"], "paths": manifest["paths"],
+            "files": [{key: item[key] for key in ("path", "sha256", "bytes")} for item in manifest["files"]],
+            "source_event_ids": manifest["source_event_ids"], "submission_id": manifest["submission_id"],
+            "submission_manifest": str(manifest_path), "submission_sha256": _digest(manifest_path.read_bytes()),
+            "publication": {"status": "pending" if manifest["payload"]["decision"] == "publish" else "no_change"}}
+
+
+def load_curator_submission(root: Path, task: dict) -> dict | None:
+    """Load an accepted submission only after its bridge receipt was committed."""
+    root = Path(root).resolve()
+    saved = _submission_manifest(root, task)
+    if saved is None:
+        return None
+    receipt = _submission_receipt(*saved)
+    database = root / ".rsi/runtime/state.sqlite3"
+    _checked_target(root, database)
+    if not database.is_file():
+        raise ValueError("curator submission receipt database is missing")
+    with sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True) as db:
+        rows = db.execute("""SELECT response_json FROM rsi_tool_operations
+            WHERE task_id=? AND tool='rsi_wiki_submit' AND status='completed'""", (task["task_id"],)).fetchall()
+    if not rows:
+        return None
+    for (encoded,) in rows:
+        response = json.loads(encoded)
+        if (isinstance(response, dict) and response.get("ok") is True and
+                all(response.get(key) == value for key, value in receipt.items())):
+            return receipt
+    raise ValueError("curator submission differs from its committed tool receipt")
+
+
+def submit_curator_pages(root: Path, store, task: dict, args: dict) -> dict:
+    """Validate selected drafts and freeze one submission inside the bridge transaction."""
+    root = Path(root).resolve()
+    if task["role"] != "curator":
+        raise ValueError("Wiki submission belongs to the current curator")
+    if not store._atomic_depth:
+        raise ValueError("curator submission requires the current bridge transaction")
+    store.validate_task(task)
+    current = store.task(task["task_id"])
+    if (current["mission_id"] != task["mission_id"] or current["input_version"] != task["input_version"] or
+            current["role"] != task["role"]):
+        raise ValueError("curator submission task identity or input version is stale")
+    prompt_hash = _submission_prompt_hash(root, task)
+    normalized = _submission_args(root, task, args)
+    if (normalized["decision"] == "no_change" and
+            pending_record_ids(store, task["mission_id"], through_version=task["input_version"])):
+        raise ValueError("no_change cannot leave pending source records uncovered; submit at least one source-linked "
+                         "local draft or query recording uncertainty, without completing the whole batch")
+    request_hash = _digest(_json(normalized).encode("utf-8"))
+    directory = _submission_directory(root, task)
+    intent_path = directory / "intent.json"
+    _checked_target(root, intent_path)
+    if intent_path.exists():
+        intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        if not isinstance(intent, dict) or intent.get("request_sha256") != request_hash:
+            raise ValueError("this curator already selected a different submission")
+        saved = _submission_manifest(root, task)
+        if saved is not None:
+            accepted = load_curator_submission(root, task)
+            return accepted if accepted is not None else _submission_receipt(*saved)
+        manifest = intent.get("manifest")
+        encoded = _json(manifest) + "\n"
+        _validate_submission_plan(root, task, intent, manifest, encoded.encode("utf-8"))
+        selected = []
+        workspace = root / ".rsi/runtime/tasks" / task["task_id"] / "workspace"
+        for item in manifest["files"]:
+            snapshot = directory / item["snapshot_path"]
+            _checked_target(root, snapshot)
+            source = snapshot if snapshot.exists() else workspace / item["path"]
+            _checked_target(root, source)
+            if not source.is_file() or source.stat().st_nlink != 1:
+                raise ValueError("selected curator draft is missing")
+            raw = source.read_bytes()
+            if _digest(raw) != item["sha256"] or len(raw) != item["bytes"]:
+                raise ValueError("selected curator draft changed during interrupted submission")
+            selected.append((item["path"], raw))
+    else:
+        workspace = root / ".rsi/runtime/tasks" / task["task_id"] / "workspace"
+        selected = []
+        for relative in normalized["paths"]:
+            path = workspace / relative
+            _checked_target(root, path)
+            if not path.is_file() or path.stat().st_nlink != 1 or not _inside(workspace, path.resolve()):
+                raise ValueError("selected curator draft is missing or outside its workspace")
+            if path.stat().st_size > 256_000:
+                raise ValueError("Wiki proposal exceeds page size limit")
+            selected.append((relative, path.read_bytes()))
+        preflight = (_publish_curator_pages(root, store, task, draft=True, proposals=selected)
+                     if normalized["decision"] == "publish" else {"source_event_ids": []})
+        manifest = {"schema_version": 1, "mission_id": task["mission_id"], "task_id": task["task_id"],
+                    "input_version": task["input_version"], "prompt_sha256": prompt_hash,
+                    "request_sha256": request_hash,
+                    "payload": {"summary": normalized["summary"], "decision": normalized["decision"]},
+                    "paths": normalized["paths"], "source_event_ids": preflight["source_event_ids"],
+                    "files": [{"path": relative, "snapshot_path": f"snapshots/{relative}",
+                               "sha256": _digest(raw), "bytes": len(raw)} for relative, raw in selected]}
+        manifest["submission_id"] = _digest(_json(manifest).encode("utf-8"))
+        encoded = _json(manifest) + "\n"
+        directory.mkdir(parents=True, exist_ok=True)
+        _atomic_replace(intent_path, _json({"schema_version": 1, "request_sha256": request_hash,
+                        "manifest_sha256": _digest(encoded.encode("utf-8")), "manifest": manifest}) + "\n")
+    # A manifest is the commit marker. Retries use saved snapshot bytes and the original intent hashes.
+    for item, (_, raw) in zip(manifest["files"], selected):
+        snapshot = directory / item["snapshot_path"]
+        _checked_target(root, snapshot)
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        if not snapshot.exists():
+            _atomic_bytes(snapshot, raw)
+    manifest_path = directory / "manifest.json"
+    _checked_target(root, manifest_path)
+    _atomic_replace(manifest_path, encoded)
+    return _submission_receipt(*_submission_manifest(root, task))
+
+
+def _proposal_pages(root: Path, store, task: dict, *, draft: bool = False,
+                    proposals: list[tuple[str, bytes]] | None = None) -> list[tuple[Path, str, str, str]]:
+    submission = None if draft or proposals is not None else load_curator_submission(root, task)
+    if submission is not None:
+        manifest_path = Path(submission["submission_manifest"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        proposals = [(item["path"], checked_file(manifest_path.parent, item["snapshot_path"], item["sha256"]))
+                     for item in manifest["files"]]
+    elif proposals is not None:
+        pass
+    elif draft:
         workspace = root / ".rsi/runtime/tasks" / task["task_id"] / "workspace"
         proposals = []
         for path in sorted((workspace / "wiki").rglob("*.md")):
@@ -275,10 +546,17 @@ def preflight_curator_pages(root: Path, store, task: dict) -> dict:
     return _publish_curator_pages(root, store, task, draft=True)
 
 
-def _publish_curator_pages(root: Path, store, task: dict, *, draft: bool = False) -> dict:
+def _publish_curator_pages(root: Path, store, task: dict, *, draft: bool = False,
+                           proposals: list[tuple[str, bytes]] | None = None) -> dict:
     """Validate the whole batch, then idempotently publish curator-authored drafts."""
     root = Path(root).resolve()
-    pages = _proposal_pages(root, store, task, draft=draft)
+    submission = None if draft else load_curator_submission(root, task)
+    if (not draft and submission is None and
+            (_submission_directory(root, task) / "intent.json").exists()):
+        raise ValueError("curator submission has no committed tool receipt")
+    if submission is not None and submission["payload"]["decision"] == "no_change":
+        return {"pages": [], "source_event_ids": []}
+    pages = _proposal_pages(root, store, task, draft=draft, proposals=proposals)
     wiki = root / "knowledge"
     targets = {target.relative_to(wiki).with_suffix("").as_posix() for target, _, _, _ in pages}
     if len(targets) != len(pages):
@@ -319,6 +597,8 @@ def _publish_curator_pages(root: Path, store, task: dict, *, draft: bool = False
         prefix = f"knowledge/raw/runtime-records/{task['mission_id']}/{event['payload']['task_id']}/"
         if event["event_id"] in pending and any(source.startswith(prefix) for source in sources):
             covered.add(event["event_id"])
+    if submission is not None:
+        covered = set(submission["source_event_ids"])
     if pending and not covered:
         raise ValueError("curator must cite pending archived records in its Wiki proposals")
     if draft:

@@ -3,13 +3,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 // Install pi-web-access in the local Pi extension directory before enabling
 // this optional adapter; the standalone bundle does not assume a host path.
-import webAccess from "pi-web-access";
-
-const prefix = join(homedir(), ".local/share/rsi/pi");
-const require = createRequire(join(prefix, "node_modules/@earendil-works/pi-coding-agent/package.json"));
-const { Type } = require("typebox");
-
-export default function (pi: any) {
+export default async function (pi: any) {
+  const prefix = join(homedir(), ".local/share/rsi/pi");
+  const require = createRequire(join(prefix, "node_modules/@earendil-works/pi-coding-agent/package.json"));
+  const { Type } = require("typebox");
+  const { createJiti } = require("jiti");
+  const jiti = createJiti(import.meta.url);
+  const { default: webAccess } = await jiti.import(join(prefix, "node_modules/pi-web-access/index.ts"));
+  const disabledTools = new Set<string>(JSON.parse(process.env.RSI_AGENT_DISABLED_TOOLS || "[]"));
   const scoped = new Proxy(pi, {
     get(target, key) {
       if (key !== "registerTool") {
@@ -17,6 +18,7 @@ export default function (pi: any) {
         return typeof value === "function" ? value.bind(target) : value;
       }
       return (tool: any) => {
+        if (disabledTools.has(tool.name)) return;
         if (tool.name === "web_search") {
           pi.registerTool({
             ...tool,
@@ -50,5 +52,5 @@ export default function (pi: any) {
       };
     },
   });
-  webAccess(scoped);
+  return webAccess(scoped);
 }

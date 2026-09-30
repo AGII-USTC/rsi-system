@@ -34,3 +34,6 @@ models.json
 dashboard/web/node_modules/
 dashboard/web/dist/
 dashboard/web/.vite/
+rsi_system/dashboard/web/node_modules/
+rsi_system/dashboard/web/dist/
+rsi_system/dashboard/web/.vite/

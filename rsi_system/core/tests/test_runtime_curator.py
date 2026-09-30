@@ -13,7 +13,7 @@ from rsi_system.core.runtime import MissionSpec, RuntimeCoordinator, RuntimeStor
 from rsi_system.core.runtime_communications import (
     prepare_communications, publish_communications, snapshot_communications)
 from rsi_system.core.runtime_curator import (
-    archive_records, pending_record_ids, publish_curator_pages)
+    archive_records, curator_document_index, pending_record_ids, publish_curator_pages)
 from rsi_system.core.runtime_evidence import build_evidence_bundle, register_curator_index
 from rsi_system.core.runtime_knowledge import reconcile_runtime_knowledge
 from rsi_system.core.knowledge import _frontmatter, _source_paths
@@ -58,6 +58,21 @@ def source(task):
     return f"knowledge/raw/runtime-records/wiki-mission/{task['task_id']}/provenance.json"
 
 
+def curator_prompt_context(prompt):
+    decoder = json.JSONDecoder()
+    for offset, character in enumerate(prompt):
+        if character != "{":
+            continue
+        try:
+            envelope, _ = decoder.raw_decode(prompt[offset:])
+        except ValueError:
+            continue
+        context = envelope.get("context") if isinstance(envelope, dict) else None
+        if isinstance(context, dict) and isinstance(context.get("curation"), dict):
+            return context
+    raise AssertionError("curator prompt envelope is missing")
+
+
 def page(task, *, status="draft", base="", sources=None, link="findings/current-evidence", kind="finding"):
     return ("---\ntitle: Memory mechanism\ncreated: 2026-09-26\nupdated: 2026-09-26\n"
             f"type: {kind}\nstatus: {status}\ntags: [memory, evidence]\n"
@@ -66,6 +81,16 @@ def page(task, *, status="draft", base="", sources=None, link="findings/current-
             "# Memory mechanism\n\nHypothesis: response timing may confound apparent memory utility. "
             "No controlled result establishes the effect. Reading depth remains limited. "
             f"Related evidence: [[{link}]].\n")
+
+
+def submit_fixture_draft(root, invocation, path, summary):
+    context = curator_prompt_context(invocation["prompt"])
+    receipt = ToolBridge(root, context["task"]["task_id"]).call({
+        "tool": "rsi_wiki_submit", "call_id": "fixture-submit", "args": {"paths": [path], "summary": summary}})
+    assert receipt["ok"] is True, receipt
+    return {"payload": receipt["payload"], "tool_protocol_version": 1,
+            "prompt_sha256": hashlib.sha256(invocation["prompt"].encode()).hexdigest(),
+            "curator_submission": {key: value for key, value in receipt.items() if key != "ok"}}
 
 
 def test_automatic_curation_archive_publish_and_stop(tmp_path):
@@ -86,8 +111,7 @@ def test_automatic_curation_archive_publish_and_stop(tmp_path):
         workspace = Path(kwargs["output_dir"]) / "workspace/wiki/findings"
         workspace.mkdir(parents=True)
         (workspace / "memory-mechanism.md").write_text(page(author))
-        return {"payload": {"summary": "organized attributed records", "decision": "publish"},
-                "tool_protocol_version": 1}
+        return submit_fixture_draft(root, kwargs, "wiki/findings/memory-mechanism.md", "organized attributed records")
 
     result = coordinator.tick(agent_runner=agent, require_model=False)
     assert result["status"] == "completed", result
@@ -126,11 +150,11 @@ def test_curator_prompt_passes_document_addresses_without_history_payloads(tmp_p
 
     def agent(**kwargs):
         captured["prompt"] = kwargs["prompt"]
-        marker = kwargs["prompt"].index('{\n  "role_responsibility"')
-        envelope = json.JSONDecoder().raw_decode(kwargs["prompt"][marker:])[0]
-        captured["context"] = envelope["context"]
-        return {"payload": {"summary": "address book inspected", "decision": "no_change"},
-                "tool_protocol_version": 1}
+        captured["context"] = curator_prompt_context(kwargs["prompt"])
+        proposal = Path(kwargs["output_dir"]) / "workspace/wiki/queries/source-questions.md"
+        proposal.parent.mkdir(parents=True, exist_ok=True)
+        proposal.write_text(page(author, kind="query"))
+        return submit_fixture_draft(root, kwargs, "wiki/queries/source-questions.md", "Source addresses and open questions inspected")
 
     result = coordinator.tick(agent_runner=agent, require_model=False)
     assert result["status"] == "completed", result
@@ -144,7 +168,11 @@ def test_curator_prompt_passes_document_addresses_without_history_payloads(tmp_p
     assert max(map(len, index_text.splitlines())) < 4096
     index = json.loads(index_text)
     assert index["records"][0]["provenance"].endswith("provenance.json")
-    assert any(item["address"].endswith("handoff.md.txt") for item in index["records"][0]["documents"])
+    reference = index["records"][0]["documents_manifest"]
+    assert reference["mode"] == "read-only"
+    documents = json.loads(Path(reference["path"]).read_text())["documents"]
+    assert any(item["path"].endswith("handoff.md.txt") for item in documents)
+    assert all(type(item["bytes"]) is int and "address" not in item for item in documents)
     assert "large-result-" not in captured["prompt"]
 
 
@@ -159,41 +187,46 @@ def test_curator_document_index_is_hash_checked_read_only_evidence(tmp_path):
     guard = Path(__file__).resolve().parents[3] / "deployment/rsi/pi-guard.ts"
 
     def agent(**kwargs):
-        marker = kwargs["prompt"].index('{\n  "role_responsibility"')
-        context = json.JSONDecoder().raw_decode(kwargs["prompt"][marker:])[0]["context"]
+        context = curator_prompt_context(kwargs["prompt"])
         index = Path(context["curation"]["document_index"])
+        catalog = Path(json.loads(index.read_text())["records"][0]["documents_manifest"]["path"])
         manifest = Path(kwargs["evidence_manifest"])
         files = json.loads(manifest.read_text())["files"]
         assert next(item for item in files if item["path"] == "wiki/curation_sources.json")["sha256"] == \
             hashlib.sha256(index.read_bytes()).hexdigest()
+        assert next(item for item in files if item["path"] == catalog.relative_to(manifest.parent).as_posix())["sha256"] == \
+            hashlib.sha256(catalog.read_bytes()).hexdigest()
         inventory = manifest.parent / "wiki/inventory.json"
         other_private = root / ".rsi/runtime/tasks" / author["task_id"] / "communications/outbox/manifest.json"
-        checks = [["read", str(index), False], ["read", str(manifest), False],
+        checks = [["read", str(index), False], ["read", str(catalog), False], ["read", str(manifest), False],
                   ["read", str(inventory), False], ["write", str(index), True],
-                  ["edit", str(index), True], ["read", str(other_private), True],
+                  ["edit", str(index), True], ["write", str(catalog), True], ["edit", str(catalog), True],
+                  ["read", str(other_private), True],
                   ["read", str(coordinator.store_path), True],
                   ["read", str(kwargs["output_dir"] / "input.json"), True],
                   ["bash", ".", True]]
         script = '''import guard from GUARD;
 import {readFileSync, writeFileSync} from 'node:fs';
-let hook; guard({on: (_, fn) => { hook = fn; }});
+let hook; guard({on: (_, fn) => { hook = fn; }, registerTool: () => {}});
 for (const [toolName, path, blocked] of JSON.parse(process.env.CHECKS)) {
   const response = await hook({toolName, input: {path}});
   if (Boolean(response?.block) !== blocked) throw Error(JSON.stringify({toolName, path, response, blocked}));
   if (!blocked && toolName === 'read') readFileSync(path);
 }
-const index = process.env.INDEX;
-const raw = readFileSync(index);
-try {
-  writeFileSync(index, Buffer.concat([raw, Buffer.from(' ')]));
-  if (!(await hook({toolName: 'read', input: {path: index}}))?.block) throw Error('changed index was readable');
-} finally { writeFileSync(index, raw); }
+for (const path of [process.env.INDEX, process.env.CATALOG]) {
+  const raw = readFileSync(path);
+  try {
+    writeFileSync(path, Buffer.concat([raw, Buffer.from(' ')]));
+    if (!(await hook({toolName: 'read', input: {path}}))?.block) throw Error('changed catalog was readable');
+  } finally { writeFileSync(path, raw); }
+}
 '''.replace("GUARD", json.dumps(guard.as_uri()))
         subprocess.run([node, "--experimental-strip-types", "--input-type=module", "-e", script],
             check=True, capture_output=True, text=True,
             env={**os.environ, "RSI_AGENT_ROOT": str(root), "RSI_AGENT_ROLE": "curator",
                  "RSI_AGENT_WORKSPACE": str(Path(kwargs["output_dir"]) / "workspace"),
                  "RSI_EVIDENCE_MANIFEST": str(manifest), "INDEX": str(index),
+                 "CATALOG": str(catalog),
                  "CHECKS": json.dumps(checks)})
         before = manifest.read_bytes()
         register_curator_index(manifest, context["task"], allow_new=False)
@@ -207,11 +240,151 @@ try {
                 register_curator_index(manifest, context["task"], allow_new=False)
         finally:
             manifest.write_bytes(before)
-        return {"payload": {"summary": "verified document access", "decision": "no_change"},
-                "tool_protocol_version": 1}
+        proposal = Path(kwargs["output_dir"]) / "workspace/wiki/queries/source-access.md"
+        proposal.parent.mkdir(parents=True, exist_ok=True)
+        proposal.write_text(page(author, kind="query"))
+        return submit_fixture_draft(root, kwargs, "wiki/queries/source-access.md", "Verified source access and open questions")
 
     result = coordinator.tick(agent_runner=agent, require_model=False)
     assert result["status"] == "completed", result
+
+
+def test_selector_index_keeps_all_sources_small_and_records_actual_sizes(tmp_path):
+    root, coordinator = setup(tmp_path, max_agent_tasks=64)
+    with RuntimeStore(coordinator.store_path) as store:
+        authors = [published(root, store, files={
+            f"reading-{number}.md": "full document content remains outside the selector\n"
+            for number in range(15 if index == 0 else 10)}, idea=f"idea-{index}")
+            for index in range(15)]
+        planners = [published(root, store, "coordinator", idea=None) for _ in range(6)]
+        objective = "complete research responsibility " + "x" * 6000
+        reason = "complete reason " + "y" * 5000
+        store.db.execute("UPDATE agent_tasks SET objective=?,reason=? WHERE task_id=?",
+                         (objective, reason, authors[0]["task_id"]))
+        store.db.commit()
+        archive_records(root, store, "wiki-mission")
+        provenance_before = {root / source(author): (root / source(author)).read_bytes()
+                             for author in authors + planners}
+        pending = pending_record_ids(store, "wiki-mission")
+        store.create_task("wiki-mission", "curator", "organize sources", "fixture")
+        curator = store.claim_task("wiki-mission")
+        directory = root / ".rsi/runtime/tasks" / curator["task_id"]
+        manifest_path = build_evidence_bundle(root, store, curator, directory)
+        index_path = Path(curator_document_index(root, store, curator, pending_ids=pending))
+        raw = index_path.read_bytes()
+        selector = json.loads(raw)
+        assert selector["schema_version"] == 2
+        assert selector["record_count"] == 15
+        assert selector["planning_record_count"] == 6
+        assert selector["document_count"] == 182
+        assert len(raw) < 30_000
+        assert objective.encode() not in raw and reason.encode() not in raw
+        assert b"full document content" not in raw
+        assert [item["source_event_id"] for item in selector["records"]] == pending
+        assert {item["task_id"] for item in selector["planning_records"]} == {item["task_id"] for item in planners}
+        artifacts = {"wiki/curation_sources.json"}
+        for record in selector["records"] + selector["planning_records"]:
+            assert "documents" not in record and "reason" not in record and "objective" not in record
+            reference = record["documents_manifest"]
+            catalog_path = Path(reference["path"])
+            catalog_raw = catalog_path.read_bytes()
+            assert reference["mode"] == "read-only"
+            assert reference["sha256"] == hashlib.sha256(catalog_raw).hexdigest()
+            assert reference["bytes"] == len(catalog_raw)
+            catalog = json.loads(catalog_raw)
+            assert len(catalog["documents"]) == reference["document_count"]
+            if record["task_id"] == authors[0]["task_id"]:
+                assert record["objective_excerpt"] == objective[:240]
+                assert catalog["objective"] == objective and catalog["reason"] == reason
+            for document in catalog["documents"]:
+                address = Path(document["path"])
+                assert address.is_absolute() and address.is_relative_to(root)
+                assert document["bytes"] == address.stat().st_size
+                assert document["sha256"] == hashlib.sha256(address.read_bytes()).hexdigest()
+                assert "address" not in document
+            artifacts.add(catalog_path.relative_to(manifest_path.parent).as_posix())
+        # Only referenced catalogs may grant access to private evidence paths.
+        hidden = index_path.parent / "curation_records/hidden.json"
+        hidden.write_text('{"private":true}\n')
+        register_curator_index(manifest_path, curator)
+        files = json.loads(manifest_path.read_text())["files"]
+        registered = {item["path"] for item in files if item["source"].startswith("Curator")}
+        assert registered == artifacts
+        assert hidden.relative_to(manifest_path.parent).as_posix() not in registered
+        receipts = manifest_path.read_bytes()
+        register_curator_index(manifest_path, curator, allow_new=False)
+        assert manifest_path.read_bytes() == receipts
+        assert Path(curator_document_index(root, store, curator, pending_ids=[])).read_bytes() == raw
+        assert all(path.read_bytes() == before for path, before in provenance_before.items())
+
+
+@pytest.mark.parametrize("allow_new", [False, True])
+def test_frozen_selector_requires_each_catalog_receipt(tmp_path, allow_new):
+    root, coordinator = setup(tmp_path)
+    with RuntimeStore(coordinator.store_path) as store:
+        published(root, store)
+        archive_records(root, store, "wiki-mission")
+        pending = pending_record_ids(store, "wiki-mission")
+        store.create_task("wiki-mission", "curator", "organize sources", "fixture")
+        curator = store.claim_task("wiki-mission")
+        directory = root / ".rsi/runtime/tasks" / curator["task_id"]
+        manifest_path = build_evidence_bundle(root, store, curator, directory)
+        index_path = Path(curator_document_index(root, store, curator, pending_ids=pending))
+        register_curator_index(manifest_path, curator)
+        catalog = Path(json.loads(index_path.read_text())["records"][0]["documents_manifest"]["path"])
+        catalog_raw = catalog.read_bytes()
+        catalog.write_bytes(catalog_raw + b" ")
+        with pytest.raises(ValueError, match="catalog hash or size mismatch"):
+            register_curator_index(manifest_path, curator, allow_new=allow_new)
+        catalog.write_bytes(catalog_raw)
+        manifest = json.loads(manifest_path.read_text())
+        manifest["files"] = [item for item in manifest["files"]
+                             if item["path"] != catalog.relative_to(manifest_path.parent).as_posix()]
+        manifest_path.write_text(json.dumps(manifest))
+        before = manifest_path.read_bytes()
+        with pytest.raises(ValueError, match="no recorded hash"):
+            register_curator_index(manifest_path, curator, allow_new=allow_new)
+        assert manifest_path.read_bytes() == before
+
+
+def test_legacy_frozen_document_index_and_receipt_are_preserved(tmp_path):
+    root, coordinator = setup(tmp_path)
+    with RuntimeStore(coordinator.store_path) as store:
+        store.create_task("wiki-mission", "curator", "organize sources", "fixture")
+        curator = store.claim_task("wiki-mission")
+        directory = root / ".rsi/runtime/tasks" / curator["task_id"]
+        manifest_path = build_evidence_bundle(root, store, curator, directory)
+        index_path = manifest_path.parent / "wiki/curation_sources.json"
+        legacy = json.dumps({"schema_version": 1, "mission_id": curator["mission_id"],
+                             "curator_task_id": curator["task_id"], "input_version": curator["input_version"],
+                             "records": [{"documents": [{"address": "/original/source", "bytes": None}]}]}, indent=2)
+        index_path.write_text(legacy)
+        register_curator_index(manifest_path, curator)
+        receipt = manifest_path.read_bytes()
+        assert curator_document_index(root, store, curator, pending_ids=[]) == str(index_path)
+        register_curator_index(manifest_path, curator, allow_new=False)
+        assert index_path.read_text() == legacy and manifest_path.read_bytes() == receipt
+        assert not (index_path.parent / "curation_records").exists()
+
+
+def test_selector_cannot_register_an_unrelated_private_file(tmp_path):
+    root, coordinator = setup(tmp_path)
+    with RuntimeStore(coordinator.store_path) as store:
+        published(root, store)
+        archive_records(root, store, "wiki-mission")
+        store.create_task("wiki-mission", "curator", "organize sources", "fixture")
+        curator = store.claim_task("wiki-mission")
+        directory = root / ".rsi/runtime/tasks" / curator["task_id"]
+        manifest_path = build_evidence_bundle(root, store, curator, directory)
+        index_path = Path(curator_document_index(root, store, curator,
+                                                pending_ids=pending_record_ids(store, "wiki-mission")))
+        selector = json.loads(index_path.read_text())
+        selector["records"][0]["documents_manifest"]["path"] = str(manifest_path)
+        index_path.write_text(json.dumps(selector))
+        before = manifest_path.read_bytes()
+        with pytest.raises(ValueError, match="task-scoped record catalog"):
+            register_curator_index(manifest_path, curator)
+        assert manifest_path.read_bytes() == before
 
 
 def test_partial_coverage_and_receipt_replay(tmp_path):
@@ -450,7 +623,7 @@ def test_real_pi_guard_extension_and_bridge_allow_curator_preflight(tmp_path):
         script.write_text("import guard from " + json.dumps((deployment / "pi-guard.ts").as_uri()) + ";\n"
             + "import extension from " + json.dumps((deployment / "pi-runtime-tools.ts").as_uri()) + ";\n" + '''
 let gate;
-guard({on(name, fn) { if(name === 'tool_call') gate = fn; }});
+guard({on(name, fn) { if(name === 'tool_call') gate = fn; }, registerTool() {}});
 let tool;
 extension({on() {}, registerTool(value) { if(value.name === 'rsi_wiki_check') tool = value; }});
 if (!process.env.ACTIVE_TOOLS.split(',').includes(tool.name)) throw Error('tool not enabled');

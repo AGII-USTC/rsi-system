@@ -187,15 +187,21 @@ def build_evidence_bundle(root, store, task, output_dir):
 
 
 def register_curator_index(manifest_path, task, *, allow_new=True):
-    """Seal the prompt's task-local document index into its read-only evidence."""
+    """Seal explicitly referenced curator catalogs into task read-only evidence."""
     if task["role"] != "curator":
         raise ValueError("only curator tasks have a document index")
     manifest_path = Path(manifest_path).resolve()
     destination = manifest_path.parent
     index = destination / "wiki/curation_sources.json"
-    if index.is_symlink() or not index.is_file() or not index.resolve().is_relative_to(destination):
-        raise ValueError("curator document index is missing or outside its evidence bundle")
-    raw = index.read_bytes()
+
+    def catalog_bytes(path):
+        if (not path.is_relative_to(destination) or not path.resolve().is_relative_to(destination) or
+                not path.is_file() or any(item.is_symlink() for item in (path, *path.parents)
+                                         if item.is_relative_to(destination))):
+            raise ValueError("curator document index is missing or outside its evidence bundle")
+        return path.read_bytes()
+
+    raw = catalog_bytes(index)
     identity = json.loads(raw)
     if (not isinstance(identity, dict) or identity.get("mission_id") != task["mission_id"] or
             identity.get("curator_task_id") != task["task_id"] or
@@ -204,18 +210,61 @@ def register_curator_index(manifest_path, task, *, allow_new=True):
     manifest = json.loads(manifest_path.read_text())
     if manifest["task_id"] != task["task_id"] or manifest["mission_id"] != task["mission_id"]:
         raise ValueError("evidence manifest identity mismatch")
-    relative = index.relative_to(destination).as_posix()
-    existing = [item for item in manifest["files"] if item["path"] == relative]
-    current_hash = digest(raw)
-    if existing:
-        if len(existing) != 1 or existing[0]["sha256"] != current_hash:
-            raise ValueError("curator document index hash mismatch")
+    artifacts = [(index, raw, "Curator document index")]
+    if identity.get("schema_version", 1) == 2:
+        records = identity.get("records")
+        planning = identity.get("planning_records")
+        if (not isinstance(records, list) or not isinstance(planning, list) or
+                identity.get("record_count") != len(records) or
+                identity.get("planning_record_count") != len(planning)):
+            raise ValueError("curator document index record counts are invalid")
+        event_ids, document_count = set(), 0
+        for record in records + planning:
+            event_id = record.get("source_event_id")
+            if type(event_id) is not int or event_id < 1 or event_id in event_ids:
+                raise ValueError("curator document index source event is invalid or duplicated")
+            event_ids.add(event_id)
+            reference = record.get("documents_manifest", {})
+            path = index.parent / "curation_records" / f"{event_id}.json"
+            if reference.get("path") != str(path) or reference.get("mode") != "read-only":
+                raise ValueError("curator catalog address must name its task-scoped record catalog")
+            catalog_raw = catalog_bytes(path)
+            if reference.get("sha256") != digest(catalog_raw) or reference.get("bytes") != len(catalog_raw):
+                raise ValueError("curator record catalog hash or size mismatch")
+            catalog = json.loads(catalog_raw)
+            if (catalog.get("schema_version") != 2 or catalog.get("mission_id") != task["mission_id"] or
+                    catalog.get("curator_task_id") != task["task_id"] or
+                    catalog.get("input_version") != task["input_version"] or
+                    any(catalog.get(key) != record.get(key) for key in
+                        ("source_event_id", "task_id", "event_version", "planning", "provenance"))):
+                raise ValueError("curator record catalog identity mismatch")
+            documents = catalog.get("documents")
+            if not isinstance(documents, list) or reference.get("document_count") != len(documents):
+                raise ValueError("curator record catalog document count mismatch")
+            document_count += len(documents)
+            artifacts.append((path, catalog_raw, "Curator record document catalog"))
+        if identity.get("document_count") != document_count:
+            raise ValueError("curator document index document count mismatch")
+    elif identity.get("schema_version", 1) != 1:
+        raise ValueError("unsupported curator document index schema")
+
+    frozen = any(item["path"] == "wiki/curation_sources.json" for item in manifest["files"])
+    additions = []
+    for path, content, source in artifacts:
+        relative = path.relative_to(destination).as_posix()
+        existing = [item for item in manifest["files"] if item["path"] == relative]
+        current_hash = digest(content)
+        if existing:
+            if len(existing) != 1 or existing[0]["sha256"] != current_hash:
+                raise ValueError("curator document index hash mismatch")
+        elif not allow_new or frozen:
+            raise ValueError("frozen curator document index has no recorded hash")
+        else:
+            additions.append({"run_id": "wiki", "path": relative, "source": source,
+                              "sha256": current_hash, "verification": "task-scoped snapshot"})
+    if not additions:
         return manifest_path
-    if not allow_new:
-        raise ValueError("frozen curator document index has no recorded hash")
-    manifest["files"].append({"run_id": "wiki", "path": relative,
-                              "source": "Curator document index", "sha256": current_hash,
-                              "verification": "task-scoped snapshot"})
+    manifest["files"].extend(additions)
     atomic_json(manifest_path, manifest)
     return manifest_path
 

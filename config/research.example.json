@@ -4,6 +4,8 @@
   "pi_executable": "pi",
   "python": "python",
   "models": {},
+  "agent_disabled_tools": {},
+  "agent_context_limit_tokens": null,
   "model_routing": {},
   "thinking": "high",
   "max_cycles": 5,

@@ -21,26 +21,50 @@ def repair_source(store, task):
 def schedule_response_repair(coordinator, store, task, exc):
     if task["role"] != "coordinator" or not isinstance(exc, ValueError):
         return False
-    if not (str(exc).startswith("challenge ") or str(exc).startswith("challenge_")
-            or str(exc).startswith("coordinator must respond to the completed independent problem reframe")):
+    error = str(exc)
+    # These are model-facing response contract failures.  They are safe to
+    # correct in a read-only continuation because no new dispatch is allowed;
+    # authorization, lease, and storage failures must still fail normally.
+    protocol_error = (error.startswith("challenge ") or error.startswith("challenge_")
+                      or error.startswith("coordinator must respond to the completed independent problem reframe")
+                      or error.startswith("coordinator decision")
+                      or error.startswith("coordinator summary")
+                      or error.startswith("coordinator expected_information")
+                      or error.startswith("coordinator budget_impact")
+                      or error.startswith("coordinator stop_condition")
+                      or error.startswith("coordinator tasks")
+                      or error.startswith("coordinator can only schedule")
+                      or error.startswith("coordinator task references")
+                      or error.startswith("coordinator task requires")
+                      or error.startswith("coordinator must")
+                      or error.startswith("stop_reframe_decision")
+                      or error.startswith("deferred stop reframe")
+                      or error.startswith("agent response must be one JSON object"))
+    if not protocol_error:
         return False
     source = repair_source(store, task)
     # One correction attempt per rejected scientific decision. Its transport
     # retry remains separately bounded by the runtime's normal recovery policy.
     if source:
         store.event(task["mission_id"], "coordinator_response_repair_exhausted",
-                    {"task_id": task["task_id"], "error": str(exc)})
+                    {"task_id": task["task_id"], "error": error,
+                     "protocol_repair": True})
         return True
     receipt = coordinator.runtime_root / "tasks" / task["task_id"] / "agent_result.json"
-    if not receipt.is_file():
+    events = coordinator.runtime_root / "tasks" / task["task_id"] / "events.jsonl"
+    # A parser failure can happen before agent_result.json is written.  The
+    # event stream is still an immutable receipt and is enough to explain the
+    # correction without replaying the provider call.
+    if not receipt.is_file() and not events.is_file():
         return False
     recovery_id = coordinator._schedule_tool_continuation(
         store, task, allow_without_tools=True,
-        recovery_reason="Correct only rejected challenge acknowledgements using current completed reports; do not repeat research or dispatch work")
+        recovery_reason=(f"Correct rejected Coordinator response: {error}; use the saved error and handoff index, "
+                         "do not repeat research or dispatch work"))
     if recovery_id:
         store.event(task["mission_id"], "coordinator_response_repair_scheduled", {
             "source_task_id": task["task_id"], "repair_task_id": recovery_id,
-            "error": str(exc)})
+            "error": error, "protocol_repair": True})
     return True
 
 
@@ -48,24 +72,48 @@ def repair_prompt(coordinator, store, task):
     source = repair_source(store, task)
     if not source:
         return None
-    receipt = coordinator.runtime_root / "tasks" / source["source_task_id"] / "agent_result.json"
-    saved = json.loads(receipt.read_text())
-    original = saved.get("payload", saved)
+    source_dir = coordinator.runtime_root / "tasks" / source["source_task_id"]
+    receipt = source_dir / "agent_result.json"
+    events = source_dir / "events.jsonl"
+    original = None
+    if receipt.is_file():
+        saved = json.loads(receipt.read_text())
+        original = saved.get("payload", saved)
     return "Correct one rejected coordinator response. Research and dispatch are disabled.\n" + json.dumps({
         "role": "coordinator",
-        "response_contract": {"summary": "Explain the corrected acknowledgement and what remains pending",
-                              "challenge_responses": "List of {task_id, disposition: adopt|defer|reject, reason, next_test}"},
+        "response_contract": {"decision": "wait (the runtime will reject schedule or stop during repair)",
+                              "summary": "Explain the corrected acknowledgement and what remains pending",
+                              "expected_information": "string",
+                              "budget_impact": "string",
+                              "stop_condition": "string",
+                              "challenge_responses": "List of {task_id, disposition: adopt|defer|reject, reason, next_test}",
+                              "tasks": "must be []",
+                              "messages": "must be []"},
         "context": {"mission_id": task["mission_id"], "input_version": task["input_version"],
                     "rejection": source["error"], "original_response": original,
+                    "receipt_files": {"agent_result": str(receipt) if receipt.is_file() else None,
+                                      "events": str(events) if events.is_file() else None,
+                                      "communications_outbox": str(source_dir / "communications/outbox/manifest.json")
+                                      if (source_dir / "communications/outbox/manifest.json").is_file() else None},
                     "reframes": reframe_inventory(store, task["mission_id"]),
-                    "instructions": "Acknowledge only completed, unacknowledged reports with report_version <= input_version. Pending/failed reports cannot be acknowledged; describe them as pending in summary. Return only summary and challenge_responses. The runtime records a wait decision and schedules no new work; the next normal coordinator turn owns further research decisions."}},
+                    "read_policy": "Use the listed receipt paths and communications index as read-only evidence. Do not replay the full Mission history or repeat the provider request.",
+                    "instructions": "The original response was rejected by the runtime. Describe the exact rejection and correct only the outer response contract. Acknowledge only completed, unacknowledged reports with report_version <= input_version. Pending/failed reports cannot be acknowledged; describe them as pending in summary. Return a JSON object with decision=wait, all required top-level fields, challenge_responses, tasks=[], and messages=[]. Do not call delegation, research, runner, or messaging tools. The next normal coordinator turn owns further research decisions."}},
         ensure_ascii=False)
 
 
 def normalize_repaired_response(payload):
-    if not isinstance(payload, dict) or set(payload) - {"summary", "challenge_responses"}:
-        raise ValueError("decision correction can only supply summary and challenge_responses")
-    return {**payload, "decision": "wait", "tasks": [], "messages": [],
-            "expected_information": "Review available branch results in a subsequent normal coordinator turn",
-            "budget_impact": "One bounded response correction; no research tasks or experiments dispatched",
-            "stop_condition": "No Mission stop requested by response correction"}
+    allowed = {"decision", "summary", "expected_information", "budget_impact", "stop_condition",
+               "challenge_responses"}
+    if not isinstance(payload, dict) or set(payload) - allowed:
+        raise ValueError("decision correction can only supply the read-only coordinator response fields")
+    if payload.get("decision") not in {None, "wait"}:
+        raise ValueError("decision correction must use decision=wait")
+    if not isinstance(payload.get("challenge_responses", []), list):
+        raise ValueError("decision correction challenge_responses must be a list")
+    return {"decision": "wait",
+            "summary": payload.get("summary", "Corrected response; no new research dispatch"),
+            "challenge_responses": payload.get("challenge_responses", []),
+            "tasks": [], "messages": [],
+            "expected_information": payload.get("expected_information", "Review available branch results in a subsequent normal coordinator turn"),
+            "budget_impact": payload.get("budget_impact", "One bounded response correction; no research tasks or experiments dispatched"),
+            "stop_condition": payload.get("stop_condition", "No Mission stop requested by response correction")}

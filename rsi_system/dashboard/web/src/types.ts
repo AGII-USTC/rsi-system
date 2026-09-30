@@ -64,6 +64,28 @@ export interface Snapshot {
   updated_at: string;
 }
 
+export interface ResearchNode {
+  node_id: string;
+  revision: number;
+  question: string;
+  scope: string;
+  summary: string;
+  owner: string;
+  execution_status: string;
+  finding_status: string;
+  finding_status_basis?: string;
+  run_refs: string[];
+  created_version: number;
+}
+
+export interface ResearchGraph {
+  mission_id: string;
+  cursor: number;
+  nodes: ResearchNode[];
+  relations: { kind: string; source: { node_id: string; revision: number }; target: { node_id: string; revision: number } }[];
+  task_bindings: { task_id: string; node_id: string; revision: number }[];
+}
+
 export interface Provider {
   name: string;
   base_url: string;

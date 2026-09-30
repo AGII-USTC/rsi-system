@@ -148,6 +148,7 @@ const researchCheckpoint = Type.Object({
 export default function (pi: any) {
   let inboxVersion: number | undefined;
   let deliveryQueue: Promise<any> = Promise.resolve();
+  let acceptedSubmissionCallId: string | undefined;
   const register = (name: string, description: string, parameters: any) => pi.registerTool({
     name, label: name, description, parameters,
     async execute(id: string, args: object) {
@@ -228,7 +229,37 @@ export default function (pi: any) {
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 12000 })) }));
   register("rsi_wiki_check", "Validate your editable Wiki proposals before finishing; returns correctable source, schema, and link errors.",
     Type.Object({}, { additionalProperties: false }));
+  if (process.env.RSI_AGENT_ROLE === "curator") {
+    pi.registerTool({
+      name: "rsi_wiki_submit", label: "rsi_wiki_submit", executionMode: "sequential",
+      description: "Submit complete Wiki proposal files from your task workspace. Runtime validates and durably accepts the exact files before the task finishes. Use decision no_change with an empty paths list when no publication is needed. An accepted receipt completes this task; validation errors remain correctable.",
+      parameters: Type.Object({
+        paths: Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 20 }),
+        summary: Type.String({ minLength: 1, maxLength: 4000 }),
+        decision: Type.Optional(Type.Union([Type.Literal("publish"), Type.Literal("no_change")], { default: "publish" })),
+      }, { additionalProperties: false }),
+      async execute(id: string, args: any) {
+        if (acceptedSubmissionCallId !== undefined) {
+          const error = { code: "submission_already_accepted", message: "This Curator task already has an accepted submission" };
+          return { content: [{ type: "text", text: JSON.stringify({ ok: false, error }) }], details: { error }, terminate: true };
+        }
+        const value = await request("rsi_wiki_submit", id, { ...args, decision: args.decision ?? "publish" });
+        const accepted = value.ok === true && value.status === "accepted";
+        if (accepted) acceptedSubmissionCallId = id;
+        return { content: [{ type: "text", text: JSON.stringify(value) }],
+          details: value.ok ? value : { error: value.error }, ...(accepted ? { terminate: true } : {}) };
+      },
+    });
+    pi.on("tool_call", () => acceptedSubmissionCallId === undefined ? undefined : {
+      block: true, terminate: true, reason: "This Curator task already has an accepted submission" });
+    pi.on("message_end", (event: any, ctx: any) => {
+      if (acceptedSubmissionCallId !== undefined && event.message?.role === "toolResult" &&
+          event.message.toolName === "rsi_wiki_submit" && event.message.toolCallId === acceptedSubmissionCallId)
+        ctx.abort();
+    });
+  }
   pi.on("tool_result", (event: any) => {
+    if (acceptedSubmissionCallId !== undefined) return;
     if (!process.env.RSI_TOOL_SOCKET || event.toolName === "rsi_inbox") return;
     const delivery = deliveryQueue.then(async () => {
       const value = await request("rsi_inbox", `inbox:${event.toolCallId}:${inboxVersion}`,

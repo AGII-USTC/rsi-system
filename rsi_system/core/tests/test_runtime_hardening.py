@@ -223,7 +223,7 @@ def test_real_guard_allows_only_manifest_files_and_blocks_recursive_leaks(tmp_pa
     (source / "ok.py").write_text("safe")
     (source / "escape").symlink_to(tmp_path / ".rsi/state.db")
     script = '''import guard from GUARD;
-let hook; guard({on: (_, fn) => { hook=fn; }});
+let hook; guard({registerTool() {}, on: (_, fn) => { hook=fn; }});
 const checks = JSON.parse(process.env.CHECKS);
 for (const [toolName,path,blocked] of checks) {
   const response = await hook({toolName,input:{path}});
@@ -257,7 +257,7 @@ def test_external_readonly_manifest_is_root_scoped_and_does_not_copy_model(tmp_p
     assert not any(item["path"].endswith("secret.txt") for item in data["roots"])
     guard = Path(__file__).resolve().parents[3] / "deployment/rsi/pi-guard.ts"
     script = '''import guard from GUARD;
-let hook; guard({on: (_, fn) => { hook=fn; }});
+let hook; guard({registerTool() {}, on: (_, fn) => { hook=fn; }});
 for (const [toolName,path,blocked] of JSON.parse(process.env.CHECKS)) {
   const response = await hook({toolName,input:{path}});
   if (Boolean(response?.block) !== blocked) throw Error(JSON.stringify({toolName,path,response,blocked}));

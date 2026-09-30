@@ -36,11 +36,15 @@ def _recover_expired(coordinator, store, mission, task, *, agent_runner, require
             # uncertain failure. It launches only with an unstarted intent.
             recoverable = True
     else:
-        recoverable = (directory / "input.json").is_file() and (directory / "agent_result.json").is_file()
-        if recoverable:
+        recoverable = False
+        if (directory / "input.json").is_file():
             try:
                 saved = json.loads((directory / "input.json").read_text())
-                recoverable = saved["task_id"] == task["task_id"] and saved["input_version"] == task["input_version"]
+                valid_input = saved["task_id"] == task["task_id"] and saved["input_version"] == task["input_version"]
+                recoverable = valid_input and (directory / "agent_result.json").is_file()
+                if valid_input and task["role"] == "curator":
+                    from .runtime_curator import load_curator_submission
+                    recoverable = recoverable or load_curator_submission(coordinator.root, task) is not None
             except (OSError, ValueError, KeyError, TypeError):
                 recoverable = False
     status_events = store.db.execute("""SELECT 1 FROM blackboard_events WHERE mission_id=? AND version>?
@@ -54,6 +58,6 @@ def _recover_expired(coordinator, store, mission, task, *, agent_runner, require
         deadline = (datetime.now(timezone.utc) + timedelta(seconds=2100)).replace(microsecond=0).isoformat()
         store.db.execute("UPDATE agent_tasks SET lease_token=?,lease_until=?,updated_at=? WHERE task_id=?",
                          (secrets.token_urlsafe(18), deadline, _now(), task["task_id"]))
-    # No new task or agent invocation: an agent receipt is required above.
+    # An accepted Curator submission can replace a lost agent_result receipt.
     return coordinator._execute_claimed(store, mission, store.task(task["task_id"]),
                                         agent_runner=agent_runner, require_model=require_model)

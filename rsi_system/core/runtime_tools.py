@@ -16,7 +16,7 @@ from .runtime_communications import (checked_file, handoff_file_ref, load_manife
                                      publish_direct_messages, resolve_handoff_file)
 from .runtime_store import RuntimeStore
 from .runtime_research import research_root_id
-from .runtime_curator import preflight_curator_pages
+from .runtime_curator import preflight_curator_pages, submit_curator_pages
 from .runtime_types import COLLABORATOR_ROLES, _json, _now, _text
 from .schema import safe_id
 from .runtime_research_contract import normalize_checkpoint, normalize_continuation, normalize_research_mandate
@@ -772,7 +772,8 @@ class ToolBridge:
         if tool not in {"rsi_delegate", "rsi_run_probe", "rsi_register_hypothesis", "rsi_register_candidate",
                         "rsi_branch_control",
                         "rsi_message", "rsi_inbox", "rsi_status", "rsi_wait", "rsi_read_handoff",
-                        "rsi_wiki_check", "rsi_research", "rsi_research_checkpoint", "rsi_audit_bash"} or not isinstance(args, dict):
+                        "rsi_wiki_check", "rsi_wiki_submit", "rsi_research", "rsi_research_checkpoint",
+                        "rsi_audit_bash"} or not isinstance(args, dict):
             return {"ok": False, "error": {"code": "invalid_request", "message": "invalid RSI tool request"}}
         try:
             if tool == "rsi_audit_bash":
@@ -828,6 +829,8 @@ class ToolBridge:
                         if parent["role"] != "curator" or operation_args:
                             raise ValueError("Wiki preflight is available to curators without arguments")
                         response = {"ok": True, **preflight_curator_pages(self.coordinator.root, store, parent)}
+                    elif tool == "rsi_wiki_submit":
+                        response = {"ok": True, **submit_curator_pages(self.coordinator.root, store, parent, operation_args)}
                     else:
                         self._validate_wait(store, parent, safe_id(operation_args.get("task_id"), "task_id"))
                         store.put_tool_operation(self.task_id, call_id, tool, digest, "pending")

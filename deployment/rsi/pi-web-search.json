@@ -1,0 +1,11 @@
+{
+  "provider": "exa",
+  "fetchRouting": {
+    "providers": ["http", "jina"],
+    "allowRemoteHostedProviders": true
+  },
+  "fetch": {"timeout": 30},
+  "webSearch": {"enabled": true},
+  "workflow": "none",
+  "allowBrowserCookies": false
+}

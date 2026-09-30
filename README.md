@@ -85,4 +85,6 @@ python -m rsi_system.dashboard.server --root . --port 8765
 
 看板只监听 `http://127.0.0.1:8765/`。`start` 只登记 Mission；`tick` 可能创建或执行任务，也可能返回等待，并不保证每次都调用模型。后台定时服务是可选的；RSI 核心使用 Python、SQLite 和本地文件，不依赖 Linux。bubblewrap 和 systemd 是 Linux 上可选的隔离与后台运行组件；正式 Runner 可使用由管理员配置的 Docker 环境。没有受控执行环境时，不应把普通 shell 诊断称作正式实验。
 
+看板的“场景 → 研究节点”读取真实研究图。选择任意现有节点，点“新增研究方向”可提交人工提议；它会作为 `proposed` 子节点保留父节点版本，并通知主编排评估。提交不自动派 Researcher 或启动实验。
+
 模型供应商和角色路由从私有配置读取。仓库中的 [`config/`](config/) 提供不含密钥的示例；运行状态、凭证、模型权重和实验数据库不应提交到 Git。更多 Mission 字段、暂停/恢复、工具和 Runner 回执操作见 [用户指南](USER_GUIDE_CN.md)，Runner 环境见 [环境指南](docs/design/runner-environments.md)。

@@ -348,7 +348,7 @@ const file=await tools[1].execute("id",{repository:"example/project",path:"READM
 if(!found.content[0].text.includes("example/project")||!file.content[0].text.includes("fixture source")) throw Error("missing results");
 try {await tools[1].execute("id",{repository:"example/project",path:"../secret"}); throw Error("traversal allowed");}
 catch(error) {if(error.message==="traversal allowed") throw error;}
-let hook; guard({on:(_,handler)=>{hook=handler;}});
+let hook; guard({registerTool() {}, on:(_,handler)=>{hook=handler;}});
 process.env.RSI_AGENT_ROLE="coder";
 if(await hook({toolName:"github_search",input:{query:"robotics"}})!==undefined) throw Error("coder search blocked");
 if(await hook({toolName:"bash",input:{command:"git clone https://github.com/example/project"}})!==undefined) throw Error("coder shell blocked");

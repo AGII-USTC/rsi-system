@@ -105,6 +105,16 @@ def research(root: Path, query: str) -> dict:
         store.close()
 
 
+def propose_node(root: Path, body: dict) -> dict:
+    if not isinstance(body, dict) or set(body) != {"mission_id", "parent", "question", "scope", "summary"}:
+        raise ValueError("proposal requires mission_id, parent, question, scope and summary")
+    mission_id = safe_id(body["mission_id"], "mission_id")
+    research(root, f"mission_id={mission_id}")
+    with RuntimeStore(root / ".rsi" / "runtime" / "state.sqlite3") as store:
+        return store.propose_human_node(mission_id, {key: body[key] for key in
+            ("parent", "question", "scope", "summary")})
+
+
 def events(root: Path, query: str) -> dict:
     values = _query(query, {"mission_id", "after_version", "limit"})
     mission_id = _mission_id(values)

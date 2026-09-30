@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .configuration import Configuration
 from .mission_control import MissionControl, RuntimeUnavailable
-from .research_api import ResearchReadError, events as research_events, research
+from .research_api import ResearchReadError, events as research_events, propose_node, research
 
 
 STATIC = Path(__file__).parent / "static"
@@ -319,6 +319,9 @@ def make_handler(root: Path, configuration: Configuration, *, control: MissionCo
                 if self.path == "/api/missions":
                     self._reply(201, control.create(body))
                     return
+                if self.path == "/api/research/nodes":
+                    self._reply(201, propose_node(root, body))
+                    return
                 match = re.fullmatch(r"/api/missions/([A-Za-z0-9._-]+)/(run|pause|resume)", self.path)
                 if match:
                     result = control.action(match[1], match[2], body)
@@ -327,6 +330,8 @@ def make_handler(root: Path, configuration: Configuration, *, control: MissionCo
                 self._reply(404, {"error": "未找到任务入口"})
             except RuntimeUnavailable as exc:
                 self._reply(409, {"error": str(exc), "runtime": control.public()["runtime"]})
+            except ResearchReadError as exc:
+                self._reply(exc.status, {"error": str(exc), "code": exc.code})
             except (ValueError, json.JSONDecodeError) as exc:
                 self._reply(400, {"error": str(exc)})
             except (OSError, sqlite3.DatabaseError):

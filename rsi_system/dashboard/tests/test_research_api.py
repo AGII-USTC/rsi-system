@@ -12,6 +12,7 @@ import threading
 import pytest
 
 from rsi_system.core.runtime_store import RuntimeStore
+from rsi_system.core.runtime_research import research_root_id
 from rsi_system.core.runtime_types import MissionSpec
 from rsi_system.dashboard.configuration import Configuration
 from rsi_system.dashboard import research_api
@@ -33,7 +34,16 @@ def api(root: Path):
                 return response.status, json.loads(response.read())
             finally:
                 conn.close()
-        yield get
+        def post(path: str, body: dict) -> tuple[int, dict]:
+            conn = http.client.HTTPConnection("127.0.0.1", httpd.server_port)
+            try:
+                conn.request("POST", path, json.dumps(body).encode(),
+                             {"Content-Type": "application/json"})
+                response = conn.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                conn.close()
+        yield get, post
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -48,7 +58,7 @@ def _store(root: Path) -> RuntimeStore:
 
 def test_missing_and_legacy_databases_are_explicit_and_unchanged(tmp_path):
     path = tmp_path / ".rsi" / "runtime" / "state.sqlite3"
-    with api(tmp_path) as get:
+    with api(tmp_path) as (get, _):
         for endpoint in ("research", "events"):
             status, body = get(f"/api/{endpoint}?mission_id=m")
             assert (status, body["code"]) == (404, "runtime_db_missing")
@@ -60,7 +70,7 @@ def test_missing_and_legacy_databases_are_explicit_and_unchanged(tmp_path):
             CREATE TABLE blackboard_events(event_id INTEGER PRIMARY KEY, mission_id TEXT,
               kind TEXT, payload_json TEXT, created_at TEXT);
             INSERT INTO missions VALUES('m',1);""")
-    with api(tmp_path) as get:
+    with api(tmp_path) as (get, _):
         for endpoint in ("research", "events"):
             status, body = get(f"/api/{endpoint}?mission_id=m")
             assert (status, body["code"]) == (409, "research_schema_unavailable")
@@ -89,7 +99,7 @@ def test_graph_snapshot_history_and_state_bindings(tmp_path):
         store.create_mission(MissionSpec("other", "separate"))
         store.event("other", "probe", {"value": 1})
         high = store.mission("m")["version"]
-    with api(tmp_path) as get:
+    with api(tmp_path) as (get, _):
         status, past = get(f"/api/research?mission_id=m&at_version={first}")
         assert status == 200
         assert past["cursor"] == first
@@ -118,7 +128,7 @@ def test_event_paging_uses_mission_versions_and_raw_payloads(tmp_path):
             if index % 9 == 0:
                 store.create_mission(MissionSpec(f"other-{index}", "separate"))
         high = store.mission("m")["version"]
-    with api(tmp_path) as get:
+    with api(tmp_path) as (get, _):
         status, first = get("/api/events?mission_id=m")
         assert status == 200
         assert len(first["events"]) == 150
@@ -154,7 +164,7 @@ def test_event_page_high_water_and_rows_share_one_snapshot(tmp_path, monkeypatch
         return row
 
     monkeypatch.setattr(research_api, "_mission", append_after_high_water)
-    with api(tmp_path) as get:
+    with api(tmp_path) as (get, _):
         status, first = get("/api/events?mission_id=m")
         assert status == 200
         assert first["high_water_mark"] == 1
@@ -174,7 +184,7 @@ def test_event_page_high_water_and_rows_share_one_snapshot(tmp_path, monkeypatch
 def test_research_rejects_malformed_or_out_of_range_queries(tmp_path, query):
     with _store(tmp_path):
         pass
-    with api(tmp_path) as get:
+    with api(tmp_path) as (get, _):
         assert get("/api/research?" + query)[0] == 400
 
 
@@ -186,14 +196,75 @@ def test_research_rejects_malformed_or_out_of_range_queries(tmp_path, query):
 def test_events_rejects_malformed_or_out_of_range_queries(tmp_path, query):
     with _store(tmp_path):
         pass
-    with api(tmp_path) as get:
+    with api(tmp_path) as (get, _):
         assert get("/api/events?" + query)[0] == 400
 
 
 def test_unknown_mission_is_not_an_empty_graph(tmp_path):
     with _store(tmp_path):
         pass
-    with api(tmp_path) as get:
+    with api(tmp_path) as (get, _):
         for endpoint in ("research", "events"):
             status, body = get(f"/api/{endpoint}?mission_id=unknown")
             assert (status, body["code"]) == (404, "mission_not_found")
+
+
+def test_human_proposal_is_versioned_and_visible_to_coordinator(tmp_path):
+    with _store(tmp_path) as store:
+        root_id = research_root_id("m")
+        store.apply_research_operation("m", "create", {
+            "node_id": root_id, "question": "Main question", "scope": "whole mission",
+            "reason": "mission start"})
+        before = store.mission("m")["version"]
+    body = {"mission_id": "m", "parent": {"node_id": root_id, "revision": 1},
+            "question": "Can a memory reader help?", "scope": "Explore retrieval at inference",
+            "summary": "Keep the base model frozen."}
+    with api(tmp_path) as (get, post):
+        status, result = post("/api/research/nodes", body)
+        assert status == 201
+        node_id = result["node"]["node_id"]
+        assert result["node"]["execution_status"] == "proposed"
+        assert result["node"]["finding_status"] == "unknown"
+        assert result["node"]["finding_status_basis"] == "human_proposal"
+        assert result["relation"]["source"] == body["parent"]
+        assert result["relation"]["target"] == {"node_id": node_id, "revision": 1}
+        assert result["mission_version"] == before + 2
+        assert node_id not in {node["node_id"] for node in
+                               get(f"/api/research?mission_id=m&at_version={before}")[1]["nodes"]}
+        assert node_id in {node["node_id"] for node in get("/api/research?mission_id=m")[1]["nodes"]}
+    with RuntimeStore(tmp_path / ".rsi" / "runtime" / "state.sqlite3") as store:
+        events = store.events("m")[-2:]
+        assert [event["kind"] for event in events] == ["research_create", "direct_message"]
+        assert events[-1]["payload"]["from_role"] == "human"
+        assert events[-1]["payload"]["to_role"] == "coordinator"
+        assert events[-1]["payload"]["proposal_id"] == node_id
+
+
+def test_human_proposal_rejects_stale_or_foreign_parent_atomically(tmp_path):
+    with _store(tmp_path) as store:
+        root_id = research_root_id("m")
+        store.apply_research_operation("m", "create", {
+            "node_id": root_id, "question": "Main question", "scope": "whole mission",
+            "reason": "mission start"})
+        store.create_mission(MissionSpec("other", "Other work"))
+        other_id = research_root_id("other")
+        store.apply_research_operation("other", "create", {
+            "node_id": other_id, "question": "Other question", "scope": "other mission",
+            "reason": "mission start"})
+        store.create_task("m", "coordinator", "Review", "Mission work")
+        actor = store.claim_task("m")
+        store.apply_research_operation("m", "revise", {
+            "node_id": root_id, "expected_revision": 1, "reason": "New evidence",
+            "summary": "Revised"}, actor_task_id=actor["task_id"])
+        before = store.mission("m")["version"]
+    body = {"mission_id": "m", "parent": {"node_id": root_id, "revision": 1},
+            "question": "New branch?", "scope": "Check", "summary": "Proposed"}
+    with api(tmp_path) as (_, post):
+        assert post("/api/research/nodes", body)[0] == 400
+        assert post("/api/research/nodes", {**body,
+            "parent": {"node_id": other_id, "revision": 1}})[0] == 400
+        assert post("/api/research/nodes", {**body, "question": " "})[0] == 400
+    with RuntimeStore(tmp_path / ".rsi" / "runtime" / "state.sqlite3") as store:
+        assert store.mission("m")["version"] == before
+        assert not [n for n in store.research_snapshot("m")["nodes"]
+                    if n["node_id"].startswith("human-")]

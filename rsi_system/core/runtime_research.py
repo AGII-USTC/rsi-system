@@ -132,6 +132,49 @@ class ResearchGraph:
         if not bound or any(not self._research_descendant(mission_id, bound, node_id) for node_id in node_ids):
             raise ValueError("research operation is outside actor's assigned branch")
 
+    def propose_human_node(self, mission_id: str, data: Mapping[str, Any]) -> dict[str, Any]:
+        """Record a human branch proposal without granting an Agent identity or Run authority."""
+        mission_id = safe_id(mission_id, "mission_id")
+        data = _object(data, "human research proposal")
+        if set(data) != {"parent", "question", "scope", "summary"}:
+            raise ValueError("proposal requires parent, question, scope and summary")
+        for field, limit in (("question", 500), ("scope", 2000), ("summary", 2000)):
+            if not isinstance(data[field], str) or not data[field].strip() or len(data[field]) > limit:
+                raise ValueError(f"{field} must be nonempty and at most {limit} characters")
+        with self.atomic():
+            mission = self.mission(mission_id)
+            if mission is None or mission["status"] not in {"active", "paused"}:
+                raise ValueError("Mission must be active or paused")
+            parent = self._research_ref(mission_id, data["parent"], "parent")
+            current = self.research_node(mission_id, parent["node_id"])
+            if current["revision"] != parent["revision"]:
+                raise ValueError("parent revision changed; refresh the research graph")
+            node_id = f"human-{secrets.token_hex(10)}"
+            version = mission["version"] + 1
+            payload = self._research_node_payload({
+                "question": data["question"].strip(), "scope": data["scope"].strip(),
+                "summary": data["summary"].strip(), "owner": "unassigned",
+                "execution_status": "proposed", "finding_status": "unknown",
+            })
+            payload["finding_status_basis"] = "human_proposal"
+            node = self._research_insert_node(mission_id, node_id, payload, version)
+            relation = self._research_insert_relation(
+                mission_id, "decomposes", parent, {"node_id": node_id, "revision": 1},
+                "Human-proposed research branch", "accepted", [], "human:operator", version)
+            self.event(mission_id, "research_create", {
+                "schema_version": 1, "actor": "human:operator", "proposal_status": "proposed",
+                "parent": parent, "node": node, "relations": [relation]})
+            self.event(mission_id, "direct_message", {
+                "from_role": "human", "from_task_id": None, "to_role": "coordinator",
+                "to_task_id": None, "idea_id": node_id, "in_reply_to": "",
+                "proposal_id": node_id, "source": "human_research_node",
+                "text": (f"Human proposed research node {node_id} under {parent['node_id']}@{parent['revision']}. "
+                         f"Question: {node['question']} Scope: {node['scope']} "
+                         "Review this proposal in the research graph; decide whether to assign a Researcher, "
+                         "defer, or reject it, and record the reason. Existing branches continue independently."),
+            })
+            return {"node": node, "relation": relation, "mission_version": self.mission(mission_id)["version"]}
+
     def _research_cycle(self, mission_id: str, source_id: str, target_id: str) -> None:
         if source_id == target_id:
             raise ValueError("research source/dependency cannot refer to itself")

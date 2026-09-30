@@ -4,6 +4,7 @@ import { discoverProvider, fetchConfig, fetchRuntime, fetchState, saveProvider, 
 import { demoSnapshot, demoStageAt } from "./demo";
 import { Scene } from "./Scene";
 import { MissionControls } from "./MissionControls";
+import { ResearchNodes } from "./ResearchNodes";
 import { WorldScene } from "./WorldScene";
 import { loadWorldSettings, WorldControls } from "./WorldControls";
 import { discoveryDraftReady, discoveryRequestKey } from "./providerDiscovery";
@@ -12,7 +13,7 @@ import type { WorldSettings } from "./worldTypes";
 import type { Config, Event, Provider, ProviderDiscovery, RuntimeState, Snapshot, Task } from "./types";
 import { ROLES, roleLabel, statusLabel } from "./types";
 
-type View = "overview" | "records" | "settings" | "graph";
+type View = "overview" | "records" | "settings" | "graph" | "research";
 type RecordTab = "tasks" | "events";
 type Feedback = { type: "success" | "error"; text: string } | null;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -339,7 +340,7 @@ export default function App() {
     <WorldScene tasks={snapshot.tasks} events={snapshot.events} objective={snapshot.mission?.objective || ""} settings={worldSettings} demo={demo} live={snapshot.mission?.status === "active" && connected} missionId={demo ? `demo-collaboration-${demoStartedAt}` : snapshot.mission?.mission_id || "empty"} onTask={openTask} onEvent={openEvent} />
     <nav className="immersive-nav" aria-label="场景操作">
       <div className="scene-menu-anchor"><button type="button" aria-expanded={sceneMenuOpen} onClick={() => setSceneMenuOpen((value) => !value)}>场景</button>
-        {sceneMenuOpen && <div className="scene-menu"><div className="scene-menu-title">选择场景</div><div className="segmented" role="group" aria-label="场景风格"><button type="button" className={worldSettings.style === "meadow" ? "active" : ""} onClick={() => { saveWorldSettings({ ...worldSettings, style: "meadow" }); setSceneMenuOpen(false); }}>草地</button><button type="button" className={worldSettings.style === "office" ? "active" : ""} onClick={() => { saveWorldSettings({ ...worldSettings, style: "office" }); setSceneMenuOpen(false); }}>工作室</button></div><button type="button" className="scene-menu-link" onClick={() => openView("graph")}>关系图</button><button type="button" className="scene-menu-link" onClick={() => { setRecordTab("events"); openView("records"); }}>任务与消息</button><div className="scene-menu-advanced"><span>更多场景设置</span><WorldControls value={worldSettings} onChange={saveWorldSettings} /></div></div>}
+        {sceneMenuOpen && <div className="scene-menu"><div className="scene-menu-title">选择场景</div><div className="segmented" role="group" aria-label="场景风格"><button type="button" className={worldSettings.style === "meadow" ? "active" : ""} onClick={() => { saveWorldSettings({ ...worldSettings, style: "meadow" }); setSceneMenuOpen(false); }}>草地</button><button type="button" className={worldSettings.style === "office" ? "active" : ""} onClick={() => { saveWorldSettings({ ...worldSettings, style: "office" }); setSceneMenuOpen(false); }}>工作室</button></div><button type="button" className="scene-menu-link" onClick={() => openView("graph")}>协作关系</button><button type="button" className="scene-menu-link" onClick={() => openView("research")}>研究节点</button><button type="button" className="scene-menu-link" onClick={() => { setRecordTab("events"); openView("records"); }}>任务与消息</button><div className="scene-menu-advanced"><span>更多场景设置</span><WorldControls value={worldSettings} onChange={saveWorldSettings} /></div></div>}
       </div>
       <button type="button" onClick={() => { setSceneMenuOpen(false); setMissionOpen(true); }}>任务</button>
       <button type="button" aria-pressed={demo} onClick={() => { setSceneMenuOpen(false); if (demo) setDemo(false); else enterDemo(); }}> {demo ? "退出演示" : "演示"}</button>
@@ -353,10 +354,11 @@ export default function App() {
       <button className="scene-menu-link" type="button" onClick={() => { setRecordTab("tasks"); openView("records"); }}>查看全部任务与消息 <ArrowRight size={14} /></button>
       <div className="immersive-drawer-status">{demo ? "演示数据" : loading ? "同步中" : connected ? "已连接本机服务" : "数据同步延迟"}{!demo && realState ? ` · 更新于 ${timeLabel(realState.updated_at)}` : ""}</div>
     </section></div>}
-    {view !== "overview" && <div className="immersive-shade immersive-view-shade" onPointerDown={(event) => { if (event.target === event.currentTarget) setView("overview"); }}><section className={`immersive-view immersive-view-${view}`} role="dialog" aria-modal="true" aria-label={view === "settings" ? "模型配置" : view === "graph" ? "关系图" : "任务与消息"}><button type="button" className="immersive-view-close" aria-label="返回场景" title="返回场景" onClick={() => setView("overview")}><X size={19} /></button>
+    {view !== "overview" && <div className="immersive-shade immersive-view-shade" onPointerDown={(event) => { if (event.target === event.currentTarget) setView("overview"); }}><section className={`immersive-view immersive-view-${view}`} role="dialog" aria-modal="true" aria-label={view === "settings" ? "模型配置" : view === "graph" ? "协作关系" : view === "research" ? "研究节点" : "任务与消息"}><button type="button" className="immersive-view-close" aria-label="返回场景" title="返回场景" onClick={() => setView("overview")}><X size={19} /></button>
       {view === "records" && <Records snapshot={snapshot} tab={recordTab} setTab={setRecordTab} taskId={taskId} eventId={eventId} selectTask={openTask} selectEvent={openEvent} />}
       {view === "settings" && <Settings config={config} error={configError} reload={() => setConfigSerial((value) => value + 1)} onSaved={setConfig} />}
       {view === "graph" && <><div className="page-head"><div><h1>协作关系</h1></div></div><Scene tasks={snapshot.tasks} events={snapshot.events} live={snapshot.mission?.status === "active" && connected} missionId={snapshot.mission?.mission_id || "empty"} onTask={openTask} onEvent={openEvent} /></>}
+      {view === "research" && <ResearchNodes mission={snapshot.mission} demo={demo} onTask={openTask} onCreated={() => setRefreshSerial((value) => value + 1)} />}
     </section></div>}
   </div>;
 }

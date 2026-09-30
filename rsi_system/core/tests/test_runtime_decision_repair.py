@@ -11,7 +11,7 @@ from .test_orchestrator import project
 from .test_runtime_reframe import decision, report
 
 
-def setup_repair(tmp_path):
+def setup_repair(tmp_path, rejected_payload=None):
     runtime = RuntimeCoordinator(project(tmp_path))
     runtime.start(MissionSpec('m', 'Explore mechanisms', resources={'max_agent_tasks': 8}))
     with RuntimeStore(runtime.store_path) as store:
@@ -26,7 +26,8 @@ def setup_repair(tmp_path):
         actor = store.create_task('m', 'coordinator', 'Review', 'New report')
         actor = store.claim_task('m')
         result = runtime._execute(store, store.mission('m'), actor,
-                                  agent_runner=lambda **kw: decision('wait'), require_model=False)
+                                  agent_runner=lambda **kw: (rejected_payload or decision('wait')),
+                                  require_model=False)
         assert result['status'] == 'task_failed'
         assert store.task(actor['task_id'])['status'] == 'failed'
         queued = [t for t in store.list_tasks('m') if t['status'] == 'queued']
@@ -64,6 +65,47 @@ def test_rejected_reply_corrected_without_research_dispatch(tmp_path):
         recorded = [e for e in store.events('m') if e['kind'] == 'coordinator_decision'][-1]
         assert recorded['payload']['decision'] == 'wait'
         assert recorded['payload']['challenge_responses'][0]['task_id'] == child['task_id']
+
+
+@pytest.mark.parametrize('rejected', [
+    {"summary": "path/event references were submitted", "decision": "handoff:task-x"},
+    {"disposition": "defer", "reason": "already reviewed", "evidence_refs": ["task-x"]},
+])
+def test_protocol_rejection_gets_local_error_and_bounded_repair(tmp_path, rejected):
+    runtime, original, child, queued = setup_repair(tmp_path, rejected_payload=rejected)
+    with RuntimeStore(runtime.store_path) as store:
+        repair = claim_repair(store)
+        prompt = runtime._prompt('coordinator', store.mission('m'), repair, store)
+        assert 'Correct one rejected coordinator response' in prompt
+        assert str(rejected) not in prompt  # raw response remains in its receipt, not copied into the prompt
+        assert 'coordinator decision must be schedule, wait, or stop' in prompt
+        assert 'communications_outbox' in prompt
+        def corrected(**kwargs):
+            return {"decision": "wait", "summary": "Acknowledged the local protocol error",
+                    "expected_information": "completed branch reports",
+                    "budget_impact": "one correction only", "stop_condition": "continue",
+                    "challenge_responses": [{"task_id": child['task_id'], "disposition": "defer",
+                                               "reason": "Needs matched evidence", "next_test": "Matched contrast"}]}
+        result = runtime._execute(store, store.mission('m'), repair,
+                                  agent_runner=corrected, require_model=False)
+        assert result['status'] == 'completed', result
+        assert store.mission('m')['status'] == 'active'
+        assert store.task(original['task_id'])['status'] == 'failed'
+        assert len([t for t in store.list_tasks('m') if t['status'] == 'queued']) == 0
+
+
+def test_recovery_context_is_source_addressed_for_followup_research(tmp_path):
+    runtime, original, child, queued = setup_repair(tmp_path)
+    with RuntimeStore(runtime.store_path) as store:
+        repair = claim_repair(store)
+        context = runtime._recovery_context(
+            store, repair,
+            runtime.runtime_root / 'tasks' / repair['task_id'] / 'communications/inbox/manifest.json')
+        assert context['source_tasks'][0]['task_id'] == original['task_id']
+        assert context['source_tasks'][0]['status'] == 'failed'
+        assert 'communications_index' in context
+        assert context['event_refs']
+        assert 'full event history' in context['read_policy']
 
 
 @pytest.mark.parametrize('payload', [

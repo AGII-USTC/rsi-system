@@ -233,7 +233,7 @@ def test_real_guard_all_roles_create_edit_and_read_handoffs(tmp_path, role):
     script = '''import guard from GUARD;
 import {mkdirSync,writeFileSync,readFileSync} from 'node:fs';
 import {dirname} from 'node:path';
-let hook; guard({on:(_,fn)=>{hook=fn;}});
+let hook; guard({registerTool() {}, on:(_,fn)=>{hook=fn;}});
 const checks=JSON.parse(process.env.CHECKS);
 for(const [toolName,path,blocked] of checks){
   const response=await hook({toolName,input:{path,content:'written by Agent'}});

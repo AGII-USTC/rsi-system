@@ -1,4 +1,4 @@
-import type { Config, ProviderDiscovery, RuntimeJob, RuntimeState, Snapshot } from "./types";
+import type { Config, ProviderDiscovery, ResearchGraph, ResearchNode, RuntimeJob, RuntimeState, Snapshot } from "./types";
 
 async function jsonRequest<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response;
@@ -25,6 +25,22 @@ async function jsonRequest<T>(path: string, options?: RequestInit): Promise<T> {
 
 export function fetchState(mission?: string): Promise<Snapshot> {
   return jsonRequest<Snapshot>(`/api/state${mission ? `?mission=${encodeURIComponent(mission)}` : ""}`);
+}
+
+export function fetchResearch(mission: string): Promise<ResearchGraph> {
+  return jsonRequest<ResearchGraph>(`/api/research?mission_id=${encodeURIComponent(mission)}`);
+}
+
+export function proposeResearchNode(body: {
+  mission_id: string;
+  parent: { node_id: string; revision: number };
+  question: string;
+  scope: string;
+  summary: string;
+}): Promise<{ node: ResearchNode; mission_version: number }> {
+  return jsonRequest("/api/research/nodes", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
 }
 
 export function fetchConfig(): Promise<Config> {

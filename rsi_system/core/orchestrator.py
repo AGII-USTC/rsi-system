@@ -193,6 +193,8 @@ def _call(root: Path, state: dict, config: dict, role: str, context: dict, runne
                         cwd=Path(cycle["workspace"]["path"]), output_dir=out,
                         timeout_seconds=config["agent_timeout_seconds"], model=role_model.get("model"),
                         provider=role_model.get("provider"), thinking=policy.get("thinking", "high"),
+                        disabled_tools=config.get("agent_disabled_tools", {}).get(role, []),
+                        context_limit_tokens=config.get("agent_context_limit_tokens"),
                         guard=root / "deployment/rsi/pi-guard.ts")
     cycle["last_receipt"] = str(receipt)
     cycle["inflight"] = None

@@ -133,3 +133,34 @@ Mission 仍 active，当前主编排 `task-93665f3ed38a167c8117` 正在评审，
 每小时 heartbeat `rsi-2` 已启用。它只在确认模型中断、没有运行或排队任务且可安全接续时，保留失败证据、把剩余额度补足到 48/12 并恢复同一 Mission；正常运行、科学失败、主动暂停和未解决的外部依赖不会触发重置。
 
 这次工作证明了执行接口和恢复边界，尚未证明身体 Memory 带来科学收益；后续研究结果仍需由 Researcher、Analyzer 和 Critic 依据统一协议解释。
+
+## 2026-10-01：Curator 提交修复后的最终核验
+
+原 Mission 当前状态为 `paused`、version `848`，没有 queued/running 任务，剩余 42 个模型任务、12 次实验。暂停事件为 `bounded collaborator retry budget exhausted`，不是余额、网络或 Runner 故障。历史任务、调用账本、输入回执和失败输出均保留；没有再次重置预算或恢复其他 Mission。
+
+### 执行协议修复
+
+事故任务 `task-dcab977ef7d3e219e483` 的六份草稿已经通过 `rsi_wiki_check`，但旧 `final_payload` 从混合解释文本中误取 `rsi_wiki_check{}`。服务器部署了 `rsi_wiki_submit` 路径提交协议，部署记录为 `/home/kang/embodied-rsi/.rsi/deployment/curator-submit-activation.json`，备份为 `/home/kang/embodied-rsi/.rsi/deployment/backups/curator-submit-20260930T180859Z/`。提交回执绑定 task、Mission、input version、prompt hash、文件 hash 和 SQLite tool operation；进程中断时从冻结回执恢复，不重新调用模型。
+
+本地核心回归为 522 passed、15 skipped；服务器 Curator 提交/恢复/工具协议回归为 83 passed、2 skipped。独立真实 Gemini 验收在隔离 fixture 中读取事故草稿及三个 provenance 来源，实际完成 `rsi_wiki_check` 和 `rsi_wiki_submit`，自然语言结尾不需要 JSON，回执重放保持相同 hash，生产 Wiki 未写入。验收证据位于服务器 `/home/kang/embodied-rsi/.rsi/deployment/curator-paging-acceptance/rsi-curator-acceptance-submission-20261001/`。
+
+### 真实研究工作
+
+修复后的 Curator 任务 `task-18ed65364b8a0b63e02f` 使用真实 Gemini/high，47 次 provider request 全部通过 256k 上下文检查。它实际执行了 22 次 `read`、6 次 `rsi_read_source`、3 次写入、4 次 `rsi_wiki_check` 和 1 次 `rsi_wiki_submit`，保存了 `progress-note.md`，提交并发布了：
+
+- `knowledge/experiments/body-memory-closed-loop-probe-boundary-20260930.md`
+- `knowledge/queries/runtime-internal-memory-reader.md`
+
+对应 `knowledge_curated` 事件为 version `847`、source event `3597`。这证明了增量阅读、落稿、回执和 Wiki 归档的执行闭环，不证明 Memory 的性能收益。
+
+### 主编排与研究限制
+
+主编排接续任务 `task-ba4bf20aaea28546387c` 和 `task-19cbc4b5f6f4f4cee988` 均有真实 Gemini 响应和工具操作，但分别因 `coordinator decision must be schedule, wait, or stop` 以及 `deferred stop reframe must not name a reviewed task` 失败。Researcher `task-3b762ad5abef654b8255` 在 provider 请求前触发 256k 预算保护。以上是协议/上下文执行问题，不是科学负结果，也没有据此强迫算法路线或伪造实验结论。
+
+后续修复：Coordinator 协议校验错误现在保留原始 `agent_result.json`、`events.jsonl` 和通信清单，并生成一次只读纠正续接。纠正提示会列出具体错误、完整顶层字段要求和可读文件地址，固定为 `decision=wait`，禁止重新派单、实验或修改研究状态；纠正耗尽仍按有限重试规则记录并暂停。普通 Researcher 续接只收到源任务状态、错误摘要、事件号和 handoff 文件索引，可用 `rsi_status`/`rsi_read_handoff` 按需读取，不再重放全量历史。
+
+本次三类原始 Coordinator 回执分别显示：`task-d01be32a91e298f9fc54` 把 `rsi_research` 的 `response_limit` 错误对象当成最终 payload；`task-ba4bf20aaea28546387c` 把 `stop_reframe_decision` 内层对象当成顶层响应；`task-19cbc4b5f6f4f4cee988` 在 `defer` 中填写了已经审过的 `reframe_task_id`。它们是外层协议装配错误，不是模型 HTTP 失败或科学结论。
+
+审查后曾误触发一次恢复辅助脚本，创建了预算事件和任务 `task-7dcf28ec0420bd535c0b`；随后立即暂停 Mission、停止服务并保留全部事件。该任务在确认没有实际执行后按原始租约标记为 `cancelled`，没有删除或重算历史预算。当前 Mission 仍为 paused、无 queued/running 任务。修复通过本地完整回归测试（522 passed, 15 skipped）和 `git diff --check`。
+
+本轮没有新的正式 Runner Run，没有真实冻结 pi0.5/LIBERO 闭环性能测量，也没有 Cross-Attention 或其他 Memory 机制的因果收益证据。已有 Wiki 页面主要记录闭环验证边界、离线诊断和下一步条件；是否形成创新机制、是否应组合、独立审计和复现，仍不能从 Curator 成功推出。Mission 因主编排接续预算耗尽暂停，后续需要用户决定是否处理 Coordinator 协议问题后再恢复，自动跟进不擅自重置预算。

@@ -116,6 +116,7 @@ Agent 使用 Pi 工具完成协作：
 - `rsi_wait`：等待子任务结果或新消息；返回时仍应调用 `rsi_status` 检查持久状态。
 - `rsi_status`：查看子任务终态、摘要、Run、checkpoint 和可用 handoff 文件。
 - `rsi_read_handoff`：只读取已完成、失败或取消任务发布的 UTF-8 文件，可用 `file_id`、`offset`、`limit` 分页。
+- `rsi_read_source`：按地址读取已获授权的长文本或归档 JSON 中的正文。可指定 `json_pointer`；输出包含 `sha256`、`next_offset` 和 `eof`，续读时带回原哈希和游标。`offset` 以 Unicode 字符计数，`max_bytes` 控制单页 UTF-8 字节数。单个源文件上限为 16 MiB，工具沿用文件读取权限，不能读取凭证或越过来源清单。
 
 协作者只能写自己的 `.rsi/runtime/tasks/<task-id>/workspace/`。任务完成时，runtime 将工作区文件复制为 `communications/outbox/manifest.json` 指向的快照，记录 SHA-256。未发布的本地路径不能作为父任务证据；失败任务的笔记会保留，但状态仍是失败。
 
@@ -155,6 +156,8 @@ Analyzer 或 Critic 读取 receipt 后，必须区分：
 ### 拆分
 
 Researcher 或 coordinator 调用 `rsi_research(action="create")` 创建子问题。省略 `parent` 时，runtime 使用当前任务绑定的精确节点 revision；coordinator 没有绑定时使用 Mission 根节点。系统写入 `decomposes` 关系并要求后续任务引用具体 revision。需要独立根节点时只能由 coordinator 显式设置 `separate_root=true`。
+
+人工可以在本机看板“场景 → 研究节点”中选中已有节点，填写研究问题、范围和依据，提交一个子方向。看板会保存来源、父节点 revision 和独立的新节点，并给主编排留消息。该节点初始为 `proposed`、没有科学结论；主编排可随后选择派单、暂缓或拒绝。旧节点、历史版本和 Run 不会因此被覆盖。当前入口只负责新增子方向，不提供人工修改既有结论。
 
 ### 组合
 
@@ -209,6 +212,22 @@ Researcher 或 coordinator 调用 `rsi_research(action="create")` 创建子问�
   "agent_timeout_seconds": null
 }
 ```
+
+私有配置可用 `"agent_disabled_tools": {"coordinator": ["web_search"]}` 仅禁用指定角色的工具，默认是空对象。这个例子在新调用注册工具和发送模型请求前移除 coordinator 的 `web_search`，保留其 MCP、GitHub 和页面读取工具；其他角色照常使用检索。角色和工具名称必须有效，已有回执不会改写。
+
+每个角色的模型也在私有 `model_routing` 中配置，例如 `"curator": {"provider": "provider-name", "model": "model-name", "thinking": "high"}`。显式 Curator 路由优先于 Researcher 的默认路由，新调用生效，旧任务回执保留原模型。
+
+Curator 先查看轻量来源目录，再自行选择记录的 `documents_manifest.path` 和其中的文件地址；目录包含来源摘要、大小和哈希，不要求一次读完所有待整理记录。每整理一组材料即可写自己的 `workspace/wiki/` 草稿并调用 `rsi_wiki_check`，未核实内容标明未解决。进度笔记记录已读范围、草稿位置和下一步，供上下文压缩后续接。
+
+完成一组草稿后，Curator 用 `rsi_wiki_submit` 提交文件地址，例如：
+
+```json
+{"paths":["wiki/findings/memory-diagnostic.md"],"summary":"整理本轮诊断及未解决问题","decision":"publish"}
+```
+
+系统校验并冻结选中的文件，保存提交回执；最后聊天回复不再承担提交协议。提交成功后任务停止，发布器另行检查旧页面版本并更新 Wiki 的索引和日志。接受提交不等于已经发布，更不等于证明研究收益。可只提交部分材料，未覆盖来源留待下一轮。空提交必须明确 `no_change` 并说明理由，而且当时不能有待整理来源；有待整理来源时可先提交记录不确定性的局部草稿。提交后中断可从同一回执恢复，不再调用模型或重复扣预算。历史任务仍按原协议读取。
+
+私有配置的 `"agent_context_limit_tokens": 256000` 对每次新的模型请求执行上下文预算检查；默认 `null` 表示没有部署指定的额外上限。检查用完整请求 JSON 的 UTF-8 字节数作为保守的输入 token 上界，并预留请求的最大输出 token（至少 16384）。这可能比实际 token 计数更早触发保护。超限会在网络请求前终止，记录可审查的预算回执。所有启用上限的角色在新任务中使用紧凑历史和只读来源地址，保留任务职责、绑定节点和证据关系；完整记录仍可按需读取，已经冻结的任务输入与旧回执不会改写。
 
 `agent_timeout_seconds: null` 表示模型 Agent 不设总执行时限，由完成任务、主动停止、故障或其他资源边界结束调用。任务租约继续续期；Runner 的单次实验时限单独设置，不受此项影响。正在执行的调用保留启动时的时限，配置更改在下一次 Agent 调用生效。
 
