@@ -5,7 +5,8 @@ import sys
 import pytest
 
 from rsi_system.core.runtime import RuntimeCoordinator, RuntimeStore, MissionSpec
-from rsi_system.core.runtime_decision_repair import repair_source
+from rsi_system.core.runtime_decision_repair import (repair_source, successful_response_repairs,
+                                                      schedule_response_repair)
 from rsi_system.core.pi_agent import run_agent
 from .test_orchestrator import project
 from .test_runtime_reframe import decision, report
@@ -79,7 +80,8 @@ def test_protocol_rejection_gets_local_error_and_bounded_repair(tmp_path, reject
         assert 'Correct one rejected coordinator response' in prompt
         assert str(rejected) not in prompt  # raw response remains in its receipt, not copied into the prompt
         assert 'coordinator decision must be schedule, wait, or stop' in prompt
-        assert 'communications_outbox' in prompt
+        assert 'communications_index' in prompt
+        assert 'source_audit_receipts' in prompt
         def corrected(**kwargs):
             return {"decision": "wait", "summary": "Acknowledged the local protocol error",
                     "expected_information": "completed branch reports",
@@ -94,6 +96,22 @@ def test_protocol_rejection_gets_local_error_and_bounded_repair(tmp_path, reject
         assert len([t for t in store.list_tasks('m') if t['status'] == 'queued']) == 0
 
 
+def test_repair_accepts_explicit_empty_dispatch_fields(tmp_path):
+    runtime, _, child, _ = setup_repair(tmp_path)
+    with RuntimeStore(runtime.store_path) as store:
+        task = claim_repair(store)
+        result = runtime._execute(store, store.mission('m'), task,
+                                  agent_runner=lambda **_: {"decision": "wait",
+                                      "summary": "Corrected", "expected_information": "none",
+                                      "budget_impact": "none", "stop_condition": "continue",
+                                      "challenge_responses": [{"task_id": child['task_id'],
+                                          "disposition": "defer", "reason": "pending",
+                                          "next_test": "matched"}], "tasks": [], "messages": []},
+                                  require_model=False)
+        assert result['status'] == 'completed'
+        assert successful_response_repairs(store, 'm') == 1
+
+
 def test_recovery_context_is_source_addressed_for_followup_research(tmp_path):
     runtime, original, child, queued = setup_repair(tmp_path)
     with RuntimeStore(runtime.store_path) as store:
@@ -106,6 +124,15 @@ def test_recovery_context_is_source_addressed_for_followup_research(tmp_path):
         assert 'communications_index' in context
         assert context['event_refs']
         assert 'full event history' in context['read_policy']
+
+
+def test_lease_error_is_not_downgraded_to_protocol_repair(tmp_path):
+    runtime, original, _, _ = setup_repair(tmp_path)
+    with RuntimeStore(runtime.store_path) as store:
+        assert not schedule_response_repair(runtime, store, original,
+                                            ValueError('coordinator task lease is no longer valid'))
+        assert not [event for event in store.events('m')
+                     if event['kind'] == 'coordinator_response_repair_exhausted']
 
 
 @pytest.mark.parametrize('payload', [

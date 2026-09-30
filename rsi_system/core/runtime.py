@@ -25,7 +25,8 @@ from .runtime_recovery import recover_expired
 from .runtime_lease import task_lease_heartbeat
 from .runtime_limits import recovery_parent
 from .runtime_decision_repair import (repair_source, repair_prompt,
-                                     normalize_repaired_response, schedule_response_repair)
+                                     normalize_repaired_response, schedule_response_repair,
+                                     successful_response_repairs)
 from .pi_agent import atomic_json
 from .runtime_roles import ROLE_GUIDANCE, model_policy
 from .runtime_communications import (prepare_communications, communication_context, load_manifest,
@@ -385,7 +386,12 @@ class RuntimeCoordinator:
                     store.finish_deferred_stop(mission["mission_id"])
                     return {"status": "stopped", "mission_id": mission["mission_id"],
                             "reason": "queued_tasks_completed"}
-                failures = store.failed_tasks(mission["mission_id"], since_resume=True)
+                resume_version = max((event["version"] for event in store.events(mission["mission_id"])
+                                      if event["kind"] == "mission_status" and
+                                      event["payload"].get("status") == "active"), default=0)
+                failures = max(0, store.failed_tasks(mission["mission_id"], since_resume=True)
+                               - successful_response_repairs(store, mission["mission_id"],
+                                                             since_version=resume_version))
                 if failures >= 2:
                     paused = store.set_mission_status(mission["mission_id"], "paused",
                                                        reason="bounded collaborator retry budget exhausted")
@@ -402,7 +408,7 @@ class RuntimeCoordinator:
 
     def _prompt(self, role: str, mission: dict[str, Any], task: dict[str, Any], store: RuntimeStore,
                 evidence_manifest=None, communication_manifest=None, external_manifest=None) -> str:
-        correction = repair_prompt(self, store, task)
+        correction = repair_prompt(self, store, task, communication_manifest=communication_manifest)
         if correction is not None:
             return correction
         payload = mission["payload"]
