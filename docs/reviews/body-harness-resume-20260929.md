@@ -203,4 +203,36 @@ Mission 仍 active，当前主编排 `task-93665f3ed38a167c8117` 正在评审，
 
 停止理由也修正为更具体的边界：一般冻结 pi0.5/LIBERO 闭环接口已由 `pi05-libero` 工程验收；剩余缺口是要测试内部 Memory 读取时，policy service 尚未提供中间 Transformer 激活或 KV 注入/adapter hook。已有 Run `run-a2a94a441eb468bbc730a937` 否定了朴素 scalar carry 的边际收益，`run-15e2b6ef0021a0bcc5258331` 只证明离线 teacher action0 修正的预测信号，仍没有内部读取分支的真实闭环收益证据。
 
-由于这次接续是有效自主停止而非模型调用故障，按用户设定没有交换 Coordinator 与 problem-reframe 模型。每小时自动跟进在交付本报告后暂停；若以后要继续，应先提供扩展 policy service 接口并启动新的、明确授权的闭环验证。
+当时没有交换 Coordinator 与 problem-reframe 模型，每小时自动跟进随后暂停。需要纠正的是：停止决策通过协议校验，不等于接口缺口无法由 Researcher/Coder 实现；不能把“用户必须先提供扩展接口”作为已证实的前提。用户随后明确授权交换模型并继续探索，接续如下。
+
+## 2026-10-01：交换角色、按需读取历史并重新探索
+
+用户明确要求交换主编排与独立问题重述模型。服务器私有路由已改为 Coordinator 使用 `aihub（research）/gpt-6-astra/high`，`problem_reframe` 使用 `sub2api-reframe/gemini-3.8-flash-high/high`。其他角色和凭证保持原配置；普通 Researcher 是 GPT-6.1-Sol/high，部分旧角色仍是 GPT-6-Sol/high，不能概括成所有角色都使用 6.1。256000 上下文、Agent/Runner 不限总时、3 协作者/1 Runner 均保持。
+
+源码提交 `4a2039a` 让可选禁用工具支持 `problem_reframe` 任务类型，Gemini 的 `web_search` 兼容开关随独立重述任务移动，不影响普通 Researcher 和 Astra Coordinator 的搜索。路由交换事件为 version `889`，人工交接为 `890`，第一次恢复为 `891`。部署清单位于服务器 `.rsi/deployment/reframe-route-swap-activation.json`。这次用户重开最初没有补预算。
+
+### 本地拦截不等于模型请求失败
+
+接续任务 `task-6c9ec996909ad11251f1` 和自动重试 `task-1b6c5f977d4bcafe8e09` 均在本地 `context_with_system` 阶段被拦截，Mission 自动暂停至 version `898`。两份事件流只有 system/user 消息，没有 assistant 响应和工具执行，也未到 `before_provider_request`。调用账本中的任务预留不能当作真实模型请求，更不能据此宣称上游余额、网络或模型出错。原始 input、prompt、stderr、events 均保留。
+
+原因是初始提示约 97.6/98.1 KB，叠加 Pi 系统信息和工具定义后，首份消息视图为 128930 字节。Astra 配置预留 128000 输出 token，视图再预留 16384 的请求封装空间；按现有保守“UTF-8 字节视作输入 token 上界”的算法，只余 111616 字节。这个检查可能早于真实 tokenizer 的上限，不能说实际已发送了超过 256k 的请求。
+
+### 默认给索引，正文按需读
+
+用户进一步指出，Agent 应自行按路径选择文件，不应开场灌入全部历史。提交 `dc1e1a0` 改为默认提供当前责任、必要约束、状态与少量历史索引：任务预览保留近期六项及活跃工作，事件/Run 等近期四项，全局节点近期六项；每类同时保留总数和完整只读来源。Wiki 只给标题、状态、路径和哈希，不内联页面正文。交接文件保留目录地址；Researcher 的组合来源给版本和引用，不重复塞入来源任务正文。预览不是科学排名，未显示的节点没有删除。
+
+角色可用 `read`、`rsi_read_source`、`rsi_read_handoff` 选读下一步真正需要的材料。内联历史目标上限由 96 KB 收紧为 48 KB，为系统提示、工具、最近一页材料和输出预留空间；最终请求保护不放宽。旧输入及完整来源快照不改写。
+
+本地核心回归为 **540 passed、15 skipped**。在服务器隔离目录回放两份原始失败，旧视图均稳定返回 78；新视图均返回 0，随后加读一页 16384 字节资料也通过。首份提示缩至 56443 字节，第二份 56515 字节。回放没有调用模型，原失败文件的哈希保持一致。证据：服务器 `.rsi/deployment/acceptance/source-index-context-20261001T121855Z/acceptance.json`。
+
+已兼容部署到实际生产入口 `experiments/rsi_control_plane/runtime_context.py`；备份为 `.rsi/deployment/backups/source-index-context-20261001T122053Z/`，清单为 `.rsi/deployment/source-index-context-activation.json`。服务器相关回归 **91 passed、1 deselected**。另一次扩展测试有 1 项失败：旧生产 `pi-web.ts` 的宿主绝对导入与可移植版测试夹具不一致，Node 原生类型剥离拒绝 node_modules 下的 TypeScript；这是额外搜索适配器隔离测试的限制，日志保留，未把它计为通过，也未为此覆盖现有生产搜索部署。
+
+确认原 Mission 无排队或运行任务后，按已授权的执行故障恢复规则，在 version `899` 补足剩余 48 个模型任务/12 次实验，原消耗不退款；version `900` 传达按需读取与继续自主研究的意见，version `901` 恢复同一个 Mission，并派出 Astra Coordinator `task-8f598b556e7e9761d54e`。这次工程恢复尚不构成新的 Memory 方法或真实 pi0.5/LIBERO 实验收益。
+
+### 后续核验：上下文通过，网络仍阻塞
+
+新任务 `task-8f598b556e7e9761d54e` 已进入 provider 请求阶段，四次检查都通过；最后一次实际请求 JSON 为 93400 字节，加 128000 输出预留仍在 256000 以内。但是调用只返回 `Connection error`，没有有效的模型研究响应或工具执行。后续自动重试 `task-3b4b351f6fd34f068994`、`task-3a0ca4b41d35e3add451` 也因连接问题失败。**这三次连接阶段失败与此前两次网络请求前的本地拦截是不同问题。** 通过请求检查仍不能证明上游已经处理或成功返回。
+
+已核验 `agent.env` 使用的共享代理 `127.0.0.1:7897`：本地 TCP 可以连接，但对 AIHub 和独立 HTTPS 站点均在 TLS 阶段超时；直接访问 AIHub 也超时。该共享代理由 renlab 账户运行，其配置对 kang 不可读，未擅自重启或修改。另对 kang 自己已有的 mihomo 服务做了可逆检查：确认 17890 端口已开始监听后，两个 HTTPS 目标仍返回 TLS EOF；随后恢复为原来的 inactive/disabled，未修改节点、凭证或 `agent.env`。证据位于上述备份目录的 `proxy-recovery.json`。
+
+为避免继续重复调用，原 Mission 在 version `914` 暂停，核验无 queued/running 任务；剩余 **45 个模型任务、12 次实验**。每小时跟进 `rsi-2` 也已暂停。需要先恢复 kangrenlab 可用的代理出口，再在同一 Mission 上按既有恢复规则继续；当前模型交换和源码修复均已保留，未产生新的正式 Run、有效研究响应或科学收益。
