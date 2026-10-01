@@ -164,3 +164,33 @@ Mission 仍 active，当前主编排 `task-93665f3ed38a167c8117` 正在评审，
 审查后曾误触发一次恢复辅助脚本，创建了预算事件和任务 `task-7dcf28ec0420bd535c0b`；随后立即暂停 Mission、停止服务并保留全部事件。该任务在确认没有实际执行后按原始租约标记为 `cancelled`，没有删除或重算历史预算。当前 Mission 仍为 paused、无 queued/running 任务。修复通过本地完整回归测试（522 passed, 15 skipped）和 `git diff --check`。
 
 本轮没有新的正式 Runner Run，没有真实冻结 pi0.5/LIBERO 闭环性能测量，也没有 Cross-Attention 或其他 Memory 机制的因果收益证据。已有 Wiki 页面主要记录闭环验证边界、离线诊断和下一步条件；是否形成创新机制、是否应组合、独立审计和复现，仍不能从 Curator 成功推出。Mission 因主编排接续预算耗尽暂停，后续需要用户决定是否处理 Coordinator 协议问题后再恢复，自动跟进不擅自重置预算。
+
+## 2026-10-01：停止审阅的局部反馈修复与再次接续
+
+用户随后授权每小时检查、在确认执行故障后修复本地源码并部署到 kangrenlab、续接同一个 Mission。本节记录新的现场核验，更新上一节的暂停状态；研究尚未完成。
+
+### 本次暂停的具体原因
+
+停止决策来自 `task-540d83ab9bfd7ed72427`，对应 Mission version `878`。运行时在 version `880` 暂停，原因是还有 **50 条历史失败任务没有被该停止决策明确审阅**。此前 `task-9e3bd58baacb8905e509` 把“Runner 任务已完成、其 Run 失败”的记录填入只允许失败任务的 `reviewed_failures`，触发 `reviewed failure must be a failed task in this Mission`。这两项属于停止协议与反馈问题，不能记为新的科学负结果。恢复前剩余 41 个模型任务、12 次实验，无 queued/running 任务。
+
+源码提交 `82116f4`（`Give provisional stops bounded failure-review feedback`）增加一次补充审阅任务，向 Coordinator 提供真正失败的任务 ID、尚未审阅的 ID、近期错误摘要和按需读取方式；明确替换停止决策时需保留有依据的原审阅项。主编排仍可派发研究、等待或停止；一次补充审阅仍不完整时暂停，不循环派发、不自动确认失败已审阅。无剩余模型预算时不派发。非法 `reviewed_failures` 引用进入既有的一次只读协议纠正流程，租约等错误仍按原规则处理。
+
+本地核心测试 **534 passed、15 skipped**；最后定向测试 **23 passed**，kangrenlab 对应测试也为 **23 passed**。原始失败回执和 version880 数据库的隔离副本回放重现了上述错误，并验证能生成局部反馈与只读纠正；生产数据库 version、原始任务和回执 hash 均未变化，回放没有调用模型。证据：服务器 `.rsi/deployment/acceptance/stop-failure-review-20261001T022308Z/acceptance.json`。
+
+部署实际更新的是服务使用的 `experiments/rsi_control_plane/runtime.py`、`runtime_decision_repair.py` 及两份相关测试。部署前核对了源码 hash；备份在 `.rsi/deployment/backups/stop-failure-review-20261001T022136Z/`，部署清单在 `.rsi/deployment/stop-failure-review-activation.json`。GitHub `origin/main` 已确认推送至 `82116f4`，包含此前未推送的 `6050c97`。本次未部署或恢复 zhaohuijin。
+
+### 独立讨论与停止理由
+
+独立问题重述 Researcher 并非从未参与：`task-14d1eb4edcdff225b225` 已完成；主编排在 version `562`（`task-1d9c6f5223bbf361ee09`）明确采纳了同来源 carry/reset/fixed/feedback 对照和完整生命周期成本核算的建议。最新停止决策选择暂缓再次重述，引用这份历史报告，称其建议已在 `run-a2a94a441eb468bbc730a937` 中检验。**这是已有独立报告及采纳记录，不等于当前停止已获得新一轮独立审查。**
+
+用户随后问“那不应该还有一个agent要讨论一下吗”。维护消息 version `882` 已将此问题交给主编排，要求它结合旧报告与后续证据判断是否应再次独立讨论，并明确依据。该消息也指出：Mission 现有环境允许 `libero-sim` 和 `pi05-libero`，一般策略推理进入仿真的接口已有工程验收；请区分现成接口与内部记忆读取新方案真正缺少的能力。消息没有代选算法、强迫重审或把接口验收说成 Memory 收益。
+
+### 恢复后的实测状态
+
+按用户已确认的故障恢复授权，version `881` 将剩余额度补足为 48/12：历史 117 个模型任务和 9 个 Runner 任务保留，对应上限 165/21。version `883` 重新激活原 Mission，保留主编排的暂定停止意图；随后系统创建补充审阅 `task-cc477b99f18948d89510`，剩余变为 **47 个模型任务、12 次实验**。
+
+首次恢复核验时，Mission 为 active/version886，该 Coordinator 正在执行。调用账本为 `sub2api-reframe/gemini-3.8-flash-high/high`、`timeout_seconds=null`；实际事件流已有 **7 条 assistant 完成响应**，包含 `read`、`rsi_research`、`rsi_inbox`、`find` 和 `rsi_status`，未见模型调用错误。该任务已经得到局部错误反馈，不只是队列或服务启动。
+
+本次维护没有新建 Runner 实验。主编排此前把 `run-15e2b6ef0021a0bcc5258331` 总结为多步历史对离线 teacher action0 修正有预测信号，但这里未重新独立复算其科学数据，也没有把它升级为真实冻结 pi0.5/LIBERO 闭环收益。新的研究选择和后续验证仍待主编排及研究员完成。
+
+每小时跟进 `rsi-2` 已设为 ACTIVE：仅在确认可恢复执行故障时修复、测试、备份部署并续接，正常工作不重复启动；科学失败、有效自主停止、用户主动暂停和真实依赖等待分别处理。状态无实质变化时保持安静，需要用户余额、权限或显存时报告并暂停。
