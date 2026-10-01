@@ -278,3 +278,17 @@ Mission 仍 active，当前主编排 `task-93665f3ed38a167c8117` 正在评审，
 截至 **2026-10-01 23:46 北京时间（15:46 UTC）**，Mission 为 **active/version936**，新 Coordinator `task-a83009f5da3e6009ab7b` 正在运行。真实调用账本与事件流确认 Astra/high、无总时限；已完成 **12 个成功 assistant 回合、12 次工具操作**：8 次 `read`，以及 `rsi_research`、`rsi_inbox`、`rsi_read_source`、`grep` 各 1 次，未见模型错误。剩余 **47 模型任务/12 实验**。证据是新任务 `events.jsonl`、数据库 `runtime_agent_calls` 和部署验收目录的 `live-verified.json`。较早的 `live-first-check.json` 因脱敏表达式误匹配 `task-` 后缀而隐藏了任务 ID，以保留确切 ID 的后续 `live-verified.json` 为准，原任务证据没有改写。
 
 这证明新代码下实际模型执行和按需工具读取已恢复；此时尚未观察到真实会话的原生 compaction 事件，也没有本次维护后新建的正式 pi0.5/LIBERO Run、Researcher 报告或科学收益。原生压缩能力的证据仍是安装 SDK 的离线假供应商验收，不能混称线上压缩已触发。每小时跟进 `rsi-2` 已恢复 ACTIVE，明确不重新添加重复上下文管理；无实质变化保持安静，发生可恢复故障才修复并续接。
+
+## 2026-10-02：校园网出口认证与原 Mission 恢复
+
+此前成功接续后再次遇到连接失败。Mission 在北京时间 00:11 自动暂停至 version1001，剩余34模型任务/12实验。两个 Curator `task-7f8d6801b3c9320cb268`、`task-f01834404ca35f0e0f61` 的数据库错误是未提交 `rsi_wiki_submit`，但原始事件流各有两次 `Connection error`，没有工具操作或有效回复。因此未提交是连接失败的派生症状，不能解释为完成整理后漏交，更不能记为科研失败。
+
+通过 renlab 核查共享7897代理：进程和端口正常，先前的system DNS配置仍在，但52个已有节点均未通过HTTPS测试。服务器直连HTTP的百度和连通性检查站点均被重定向到校园网络通门户，HTTPS超时。Tailscale SSH可达并不证明服务器具备外网权限。新订阅只在私有目录隔离测试，未覆盖生产订阅；初始TCP探针不能判断Hysteria2的UDP协议是否可用，随后已用独立Mihomo实例完成实际协议测试，原始结果分别保存。
+
+用户随后授权校园网登录。北京时间约01:01，门户确认服务器原先只有校内权限，账号具有完整权限；按账号已选的电信网出口3、永久设置开通国际出口后，返回“网络设置成功”。密码没有保存到源码、配置或诊断记录。此后直连HTTPS恢复；原订阅52项有13项、新订阅41项有10项通过HTTPS延迟测试。该计数包含订阅中的别名，不能当成独立物理线路数量。生产仍使用原订阅，选择器改为通过测试的日本节点，保留7897端口。
+
+AIHub通过代理可达；Gemini域名通过代理仍超时，但直连返回预期的未鉴权路由响应，因此只将该域名追加到私有 `agent.env` 的NO_PROXY。首次恢复前检查未通过时已还原环境、没有修改Mission预算；之后重新验证通过才继续。网络检查不是模型推理成功。私有网络证据位于 `/home/renlab/.local/state/rsi-proxy-repairs/20261001T170150Z/`。
+
+确认paused/version1001且无queued/running后，备份数据库与环境，version1002按既有授权补足剩余48模型任务/12实验，历史140个模型任务和9个Runner保留，累计上限188/21；1003发送错误原因和历史交接索引，1004恢复同一个Mission。模型路由、思维强度、并发、不限时及Pi原生上下文管理均未变。激活记录 `.rsi/deployment/campus-network-resume-20261002.json`，备份 `.rsi/deployment/backups/campus-network-20261001T170930Z/`。
+
+北京时间约01:10实查为active/version1006，Curator `task-140d214d64072fac8589` 正在运行，已经有4次真实assistant回复和4次read，未见模型错误。证据 `.rsi/deployment/campus-network-live-20261002.json` 与该任务原始事件流。这里确认的是模型和工具链路恢复，尚未确认Wiki发布、新的正式Run或科学收益。每小时跟进恢复ACTIVE。
