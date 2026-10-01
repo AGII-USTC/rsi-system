@@ -1,5 +1,60 @@
 # Zhaohuijin Deployment, 2026-09-30
 
+## Latest update: native Pi context management, 2026-10-01
+
+At 23:57 Beijing time on October 1, the user-authorized update was installed
+under the same physical checkout, using selected files from commit `a37568f`.
+This is a compatible file deployment, not a reset of the remote Git worktree.
+The historical initialization and context-guard descriptions below describe
+earlier deployments; the native Pi behavior in this section supersedes them.
+
+The deployed files are `core/pi_agent.py`, `core/config.py`,
+`core/runtime_context.py`, `core/runtime_evidence.py` under `rsi_system/`,
+`deployment/rsi/pi-guard.ts`, three corresponding tests, and
+`docs/design/pi-native-context-management.md`. RSI no longer estimates tokens
+from JSON byte counts to reject requests, edits the conversation for compaction,
+forces an output-token limit, truncates native Pi tool results a second time,
+or terminates an Agent for a cumulative 16 MiB event log. Model windows remain
+256000; Pi manages conversation compaction and overflow recovery.
+
+The server had already received the Curator's schema-2 source catalogs, but
+its evidence registrar still registered only the top-level catalog. This
+deployment also brings the matching registration and hash checks for each
+referenced record catalog. Existing source-index snapshots remain unchanged.
+
+There were no running Agents or Runners at the deployment boundary. The
+dashboard was briefly stopped, the coordinator lock acquired, and databases
+and each replaced file backed up. The dashboard was then restarted with PID
+410160; `/`, `/app.js`, `/style.css`, `/api/runtime`, and `/api/config` returned
+HTTP 200. Private configuration hashes and a logical dump hash of the runtime
+database matched before and after the update. The independent Missions remain:
+
+- `dsh-cve-envbuild-20260930-001`: active/version39, with the pre-existing queued
+  Coordinator `task-e1f69bed1ac0657a390e`.
+- `dsh-cve-memory-study-20261001-001`: active/version65, no running task at inspection.
+
+No Mission was created, resumed, ticked, or given more budget by this update.
+Role routes remain specific to this server: Gemini/high Coordinator and Curator,
+Astra/high independent reframe, and Sol 6.1/xhigh Researcher/default. This does
+not copy kangrenlab's role swap into this deployment.
+
+Focused tests passed in isolation and against the deployed production files:
+110 passed, one SDK-path-dependent test skipped. The initial isolation run
+exposed stale Curator test fixtures and the missing catalog registrar; the
+baseline failures and all subsequent logs were retained. Using this server's
+installed Pi 0.87.1 SDK with an offline fake provider also verified automatic
+compaction and continuation: three user calls, one summary, zero network
+requests. These are engineering checks, not a new live model call or a research
+result.
+
+Evidence paths relative to the deployment root:
+
+- `.rsi/deployment/pi-native-activation.json`: per-file old/new hashes, service
+  health, database-preservation verification, and source commit.
+- `.rsi/deployment/backups/pi-native-20261001T155733Z/`: old files and databases.
+- `.rsi/deployment/acceptance/pi-native-20261001T155733Z/`: initial failures,
+  baseline comparison, passing focused/production tests, and native SDK receipt.
+
 ## Location and State
 
 - SSH alias: `zhaohuijin`; login account: `zhanchi.wang`.
