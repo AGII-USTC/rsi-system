@@ -304,3 +304,15 @@ AIHub通过代理可达；Gemini域名通过代理仍超时，但直连返回预
 本地Curator、提交恢复与runtime tools相关回归通过（1项服务器布局依赖的Pi集成测试跳过）。另用本机已安装Pi的真实`validateToolArguments`回放原始失败参数：空对象与原reason均通过，未知path、对象reason和超长reason均拒绝。这是原参数回放和模拟故障回归，尚不是服务器完整失败日志回放，更不是新科学结果。
 
 本轮02:28后，SSH经`100.74.14.89:22`重复超时，Tailscale ping两次无响应；已知校园网地址`202.38.76.43:22`同样超时。本机Tailscale显示Running，Peer标记Online，但不能据此断言服务器SSH可达或判断断电、路由等具体根因。无法读取新的Mission状态，也未向服务器写入本轮修复、修改预算或恢复Mission。部署需待服务器连接恢复后，核对实际legacy入口差异、备份并验证再执行；当前不能宣称部署完成。
+
+## 2026-10-02 连接恢复后的部署与真实接续
+
+北京时间约05:53，SSH恢复，实查仍为paused/version1011、剩余46/12且无运行/排队任务。将`2b61f58`按补丁应用到服务器实际`experiments/rsi_control_plane`入口和`deployment/rsi/pi-runtime-tools.ts`，保留既有远端改动；数据库及相关文件备份到`.rsi/deployment/backups/curator-retry-20261001T215309Z/`。生产相关回归93通过、2跳过，日志`.rsi/deployment/curator-retry-tests.log`。原始失败事件中的reason参数通过服务器Pi `validateToolArguments`回放；旧Curator的4份草稿和1份进度文件在新只读inbox中全部可定位，哈希匹配。证据`.rsi/deployment/curator-retry-acceptance/replay.json`和`schema-result.json`。未对完整模型对话进行重放，也未自动发布旧稿。
+
+version1012补足剩余48/12，保留142个历史模型任务和9个Runner；1013工程交接，1014恢复。新`task-0390d0b04b21c2416e6d`实际请求gpt-6.1-sol后返回Connection error，失败原因已被新逻辑正确保留；自动后续`task-98ce0c96f8978dc0532b`也出现连接错误，因此1020暂时暂停派发排查。SSH可达和代码验收通过不代表模型链路成功。
+
+实测校园网普通HTTP/HTTPS正常，但AIHub直连及原日本代理节点超时。Clash Verge已重启，生产管理API由9097变为Unix socket `/tmp/verge/verge-mihomo.sock`。13个历史可用节点复测仅“美国01|流媒体|0.1x”成功；将原7897订阅的“良心云”选择器改为该节点后，AIHub HTTPS返回401（仅证实链路可达）。原始失败测试和前后节点记录保存在renlab的`/home/renlab/.local/state/rsi-proxy-repairs/curator-20261002/`。
+
+北京时间06:01:45，正在执行的`task-98ce0c96f8978dc0532b`在Pi原生重试中恢复：10次成功assistant回复，16次read，ls/grep/rsi_read_source各1次，write 2次，rsi_wiki_check及rsi_inbox各1次。已写`workspace/wiki/queries/body-memory-retention-history-competing-explanations-20261001.md`及`workspace/progress.md`。据此恢复调度为active/version1021，保持该任务不重启、不再次补预算，剩余46模型任务/12实验。实查证据`.rsi/deployment/curator-live-recovery.json`。Curator保持AIHub/gpt-6.1-sol/medium，Researcher保持high。
+
+这次已确认真实模型和工具恢复、有新增草稿与进度；该时点尚未核验Wiki正式发布，也没有新增科学收益的结论。原rsi-2自动跟进已恢复ACTIVE，按用户要求每小时检查一次。
