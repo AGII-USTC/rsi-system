@@ -316,3 +316,15 @@ version1012补足剩余48/12，保留142个历史模型任务和9个Runner；101
 北京时间06:01:45，正在执行的`task-98ce0c96f8978dc0532b`在Pi原生重试中恢复：10次成功assistant回复，16次read，ls/grep/rsi_read_source各1次，write 2次，rsi_wiki_check及rsi_inbox各1次。已写`workspace/wiki/queries/body-memory-retention-history-competing-explanations-20261001.md`及`workspace/progress.md`。据此恢复调度为active/version1021，保持该任务不重启、不再次补预算，剩余46模型任务/12实验。实查证据`.rsi/deployment/curator-live-recovery.json`。Curator保持AIHub/gpt-6.1-sol/medium，Researcher保持high。
 
 这次已确认真实模型和工具恢复、有新增草稿与进度；该时点尚未核验Wiki正式发布，也没有新增科学收益的结论。原rsi-2自动跟进已恢复ACTIVE，按用户要求每小时检查一次。
+
+## 2026-10-02 07:03 跟进：预检通过，连接再次中断
+
+北京时间07:03:42实际读取原Mission为paused/version1029，剩余44模型任务/12实验，无queued/running。恢复后的`task-738e882d2626a04f3e48`有12次成功toolUse回复，写5份Wiki草稿并编辑1次，但后续Connection error导致失败；`task-304266f9587105c229a5`有16次成功toolUse回复、24次read、3次write、5次edit、4次rsi_wiki_check，最终也因Connection error失败。原始证据为两项任务的`events.jsonl`及冻结`communications/outbox/manifest.json`；version1025、1028发布失败任务交接，version1029记录自动暂停原因`curator failures require reconciliation before curation`。
+
+本轮新增的工程有效工作：后一项Curator收到缺失来源路径、缺少tags等具体错误后自行编辑修正；最后一次rsi_wiki_check返回ok=true，3份草稿对应`knowledge/findings/body-memory-retention-vs-history-20261001.md`、`knowledge/queries/discounted-body-memory-crfn-20261001.md`、`knowledge/queries/phase-decoupled-internal-adapter-20261001.md`，覆盖来源事件3718、3738、3749。但是没有rsi_wiki_submit接受回执，也没有knowledge_curated事件；上述地址是拟发布地址，不能当成已正式发布页面。3份实际草稿仍在`task-304266f9587105c229a5/workspace/wiki/`和它的冻结outbox中。
+
+对上轮恢复记录补充：`task-98ce0c96f8978dc0532b`的模型虽在代理切换后恢复，但暂停/恢复期间工具收到`task output uses stale Mission state/status`，导致提交未被接受、最终失败；不能把version1021的“模型恢复”写成该任务成功。后续新任务按新状态接续，已经能正常收到预检结果。
+
+本次尚无新Run：数据库仍8条Run，最近创建的`run-15e2b6ef0021a0bcc5258331`属于internal-memory-reader，时间2026-09-30 13:41:54北京时间；completed状态本身不构成真实pi0.5/LIBERO效果证据。本轮仅确认Wiki校验反馈与修正有效，没有新的科学收益。
+
+07:03状态读取成功后，kang与renlab两种已授权SSH登录接连发生banner exchange或连接超时；25秒超时的单次重试仍失败。Tailscale可经DERP收到327/499ms应答，但未建立直连，不能据此断言SSH、模型链路或校园网出口健康。模型端点及全节点测试命令因SSH失败未执行，没有新的节点质量结论。未改代理、模型配置、预算、任务状态、源码或原始记录；Mission在最后实际读取时已经自动暂停。
