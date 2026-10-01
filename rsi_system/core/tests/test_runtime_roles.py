@@ -90,6 +90,7 @@ def test_runtime_ledger_records_selected_task_route(tmp_path):
         "researcher": {"provider": "fixture", "model": "sol", "thinking": "xhigh"},
         "default": {"provider": "fixture", "model": "sol", "thinking": "high"},
     }
+    config["agent_disabled_tools"] = {"problem_reframe": ["web_search"]}
     path.write_text(json.dumps(config))
     coordinator = RuntimeCoordinator(root)
     coordinator.start(MissionSpec("m", "reframe", resources={"max_agent_tasks": 4}))
@@ -108,6 +109,7 @@ def test_runtime_ledger_records_selected_task_route(tmp_path):
             "recommendation": "continue",
         }
     }))
+    assert calls[0]["disabled_tools"] == ["web_search"]
     assert result["status"] == "completed", result
     assert (calls[0]["model"], calls[0]["thinking"]) == ("astra", "high")
     with RuntimeStore(coordinator.store_path) as store:

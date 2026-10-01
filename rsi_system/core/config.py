@@ -31,7 +31,8 @@ def load_research_config(root: Path, *, config_dir: Path | None = None) -> dict:
     if not isinstance(disabled_tools, dict):
         raise ValueError("agent_disabled_tools must be an object")
     for role, tools in disabled_tools.items():
-        validate_disabled_tools(role, tools)
+        # Independent reframes execute as researchers but may use a different provider.
+        validate_disabled_tools("researcher" if role == "problem_reframe" else role, tools)
     context_limit = public.setdefault("agent_context_limit_tokens", None)
     if context_limit is not None and (type(context_limit) is not int or context_limit <= 16384):
         raise ValueError("agent_context_limit_tokens must be null or an integer greater than the 16384 output reserve")

@@ -348,6 +348,13 @@ def model_policy(config, role, thinking_override=None, task_kind="standard"):
         route = {}
     model = route
     policy = {**config, "models": {**models, role: model}}
+    if task_kind == "problem_reframe":
+        disabled = config.get("agent_disabled_tools", {})
+        if "problem_reframe" in disabled:
+            # Add task-kind restrictions without mutating shared role defaults or
+            # re-enabling tools already disabled for all researchers.
+            policy["agent_disabled_tools"] = {**disabled, role: list(dict.fromkeys(
+                disabled.get(role, []) + disabled["problem_reframe"]))}
     provider = model.get("provider") if isinstance(model, dict) else None
     model_id = model.get("model") if isinstance(model, dict) else None
     selected = _model_thinking(policy, provider, model_id)

@@ -11,6 +11,7 @@ import pytest
 from rsi_system.core.config import load_research_config
 from rsi_system.core.pi_agent import TOOLS, run_agent, link_pi_configuration
 from rsi_system.core.runtime import MissionSpec, RuntimeCoordinator, RuntimeStore
+from rsi_system.core.runtime_roles import model_policy
 from .test_orchestrator import project
 from .test_runtime_acceptance import decision
 
@@ -19,6 +20,8 @@ from .test_runtime_acceptance import decision
     None, [], "web_search", {"unknown": []}, {"coordinator": "web_search"},
     {"coordinator": None}, {"coordinator": [None]}, {"coordinator": ["unknown"]},
     {"coordinator": ["bash"]}, {"coordinator": ["web_search", "web_search"]},
+    {"problem_reframe": "web_search"}, {"problem_reframe": ["unknown"]},
+    {"problem_reframe": ["web_search", "web_search"]},
 ])
 def test_disabled_tool_config_rejects_invalid_roles_names_and_types(tmp_path, disabled):
     root = project(tmp_path)
@@ -49,6 +52,25 @@ print(json.dumps({"type":"message_end","message":{"role":"assistant","stopReason
 ''')
     executable.chmod(0o755)
     return executable
+
+
+def test_reframe_tool_restrictions_are_additive_and_do_not_change_standard_researchers(tmp_path):
+    root = project(tmp_path)
+    private = tmp_path / "private"
+    private.mkdir()
+    declared = {"researcher": ["fetch_content"], "problem_reframe": ["web_search"]}
+    (private / "research.json").write_text(json.dumps({"agent_disabled_tools": declared}))
+    config = load_research_config(root, config_dir=private)
+    for kind, expected in [("problem_reframe", ["fetch_content", "web_search"]),
+                           ("standard", ["fetch_content"])]:
+        effective = model_policy(config, "researcher", task_kind=kind)
+        result = run_agent(executable=str(fake_pi(tmp_path)), role="researcher", prompt="{}",
+                           cwd=tmp_path, output_dir=tmp_path / kind, timeout_seconds=5,
+                           disabled_tools=effective["agent_disabled_tools"].get("researcher", []))
+        assert result["payload"]["disabled"] == expected
+        assert ("web_search" in result["tools"]) == (kind == "standard")
+    assert config["agent_disabled_tools"] == declared
+    assert model_policy(config, "coordinator")["agent_disabled_tools"].get("coordinator", []) == []
 
 
 @pytest.mark.parametrize("role", ["coordinator", "researcher"])

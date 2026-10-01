@@ -215,6 +215,8 @@ Researcher 或 coordinator 调用 `rsi_research(action="create")` 创建子问�
 
 私有配置可用 `"agent_disabled_tools": {"coordinator": ["web_search"]}` 仅禁用指定角色的工具，默认是空对象。这个例子在新调用注册工具和发送模型请求前移除 coordinator 的 `web_search`，保留其 MCP、GitHub 和页面读取工具；其他角色照常使用检索。角色和工具名称必须有效，已有回执不会改写。
 
+独立问题重述使用 Researcher 角色，但可以单独配置 `"agent_disabled_tools": {"problem_reframe": ["web_search"]}`。该限制只作用于 `task_kind=problem_reframe` 的新调用，并与 Researcher 角色已有禁用项合并；普通 Researcher 的搜索能力不变。交换角色模型时，应将供应商需要的可选兼容开关配置到对应角色或任务类型，不必关闭所有研究员的搜索。
+
 每个角色的模型也在私有 `model_routing` 中配置，例如 `"curator": {"provider": "provider-name", "model": "model-name", "thinking": "high"}`。显式 Curator 路由优先于 Researcher 的默认路由，新调用生效，旧任务回执保留原模型。
 
 Curator 先查看轻量来源目录，再自行选择记录的 `documents_manifest.path` 和其中的文件地址；目录包含来源摘要、大小和哈希，不要求一次读完所有待整理记录。每整理一组材料即可写自己的 `workspace/wiki/` 草稿并调用 `rsi_wiki_check`，未核实内容标明未解决。进度笔记记录已读范围、草稿位置和下一步，供上下文压缩后续接。
