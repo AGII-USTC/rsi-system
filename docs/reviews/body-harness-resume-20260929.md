@@ -194,3 +194,13 @@ Mission 仍 active，当前主编排 `task-93665f3ed38a167c8117` 正在评审，
 本次维护没有新建 Runner 实验。主编排此前把 `run-15e2b6ef0021a0bcc5258331` 总结为多步历史对离线 teacher action0 修正有预测信号，但这里未重新独立复算其科学数据，也没有把它升级为真实冻结 pi0.5/LIBERO 闭环收益。新的研究选择和后续验证仍待主编排及研究员完成。
 
 每小时跟进 `rsi-2` 已设为 ACTIVE：仅在确认可恢复执行故障时修复、测试、备份部署并续接，正常工作不重复启动；科学失败、有效自主停止、用户主动暂停和真实依赖等待分别处理。状态无实质变化时保持安静，需要用户余额、权限或显存时报告并暂停。
+
+## 2026-10-01：补充停止审阅完成
+
+恢复后的 Coordinator `task-cc477b99f18948d89510` 已完成真实 Gemini/high 调用，Mission version `887` 记录了 `stop`，version `888` 完成通信发布，Mission 最终状态为 `stopped`。本次没有新 Runner Run，剩余 47 个模型任务和 12 次实验；没有 queued/running 任务。
+
+这次补充审阅明确列出并审阅了 **57 条**历史失败任务，修正了此前把“完成但 Run 失败”的 Runner 记录误放进 `reviewed_failures` 的问题。它确认 `task-14d1eb4edcdff225b225` 的独立问题重述已经在 version `562` 被主编排采纳，并认为在已有 C/R/F/N 对照与后续离线时序信号之后，再进行纯概念重述不会改变当前判断。因此 `stop_reframe_decision` 为 `defer`，没有伪造一轮新的独立 Researcher。
+
+停止理由也修正为更具体的边界：一般冻结 pi0.5/LIBERO 闭环接口已由 `pi05-libero` 工程验收；剩余缺口是要测试内部 Memory 读取时，policy service 尚未提供中间 Transformer 激活或 KV 注入/adapter hook。已有 Run `run-a2a94a441eb468bbc730a937` 否定了朴素 scalar carry 的边际收益，`run-15e2b6ef0021a0bcc5258331` 只证明离线 teacher action0 修正的预测信号，仍没有内部读取分支的真实闭环收益证据。
+
+由于这次接续是有效自主停止而非模型调用故障，按用户设定没有交换 Coordinator 与 problem-reframe 模型。每小时自动跟进在交付本报告后暂停；若以后要继续，应先提供扩展 policy service 接口并启动新的、明确授权的闭环验证。
