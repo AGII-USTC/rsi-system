@@ -379,7 +379,34 @@ class RuntimeCoordinator:
                                     mission["mission_id"], research_root_id(mission["mission_id"])) else None))
                         return {"status": "scheduled", "reason": "final_research_review",
                                 "task_id": review["task_id"], "role": "coordinator"}
-                    if store.unreviewed_deferred_failures(mission["mission_id"]):
+                    missing_failures = store.unreviewed_deferred_failures(mission["mission_id"])
+                    if missing_failures:
+                        resume_version = max((event["version"] for event in store.events(mission["mission_id"])
+                                              if event["kind"] == "mission_status" and
+                                              event["payload"].get("status") == "active"), default=0)
+                        already_requested = any(event["kind"] == "stop_failure_review_requested" and
+                                                event["version"] > resume_version
+                                                for event in store.events(mission["mission_id"]))
+                        if not already_requested and store.remaining_agent_tasks(mission["mission_id"]) != 0:
+                            with store.atomic():
+                                review = store.create_task(mission["mission_id"], "coordinator",
+                                    "Review the missing failure acknowledgements in the provisional stop; "
+                                    "choose whether to continue, wait, or stop after inspecting the indexed evidence",
+                                    "Local stop validation: unreviewed failed tasks remain; inspect "
+                                    "context.stop_failure_review and use rsi_status by task_id. "
+                                    "A failed Run does not imply its Runner task failed.",
+                                    research_node_id=(research_root_id(mission["mission_id"]) if store.research_node(
+                                        mission["mission_id"], research_root_id(mission["mission_id"])) else None))
+                                store.event(mission["mission_id"], "stop_failure_review_requested", {
+                                    "task_id": review["task_id"],
+                                    "source_task_id": stops[-1]["payload"].get("task_id") if stops else None,
+                                    "unreviewed_failed_task_ids": missing_failures,
+                                    "error": "cannot stop with unreviewed failed tasks",
+                                    "read_policy": "Read individual task receipts with rsi_status; acknowledge only failed tasks in this Mission.",
+                                    "attempt_limit": "one feedback review per explicit resume"})
+                            return {"status": "scheduled", "reason": "stop_failure_review",
+                                    "task_id": review["task_id"], "role": "coordinator",
+                                    "mission_id": mission["mission_id"]}
                         store.set_mission_status(mission["mission_id"], "paused",
                                                  reason="queued tasks failed before deferred stop")
                         return {"status": "paused", "reason": "deferred_stop_task_failed"}
@@ -516,6 +543,19 @@ class RuntimeCoordinator:
                        "composition_lineage": composition_lineage}}
         if role == "coordinator":
             context["exploration_portfolio"] = build_portfolio_context(store, mission["mission_id"])
+            failed_tasks = [item for item in context_tasks if item["status"] == "failed"]
+            context["stop_failure_review"] = {
+                "eligible_failed_task_ids": [item["task_id"] for item in failed_tasks],
+                "unreviewed_failed_task_ids": store.unreviewed_deferred_failures(mission["mission_id"])
+                if store.deferred_stop(mission["mission_id"]) else [],
+                "recent_failures": [{"task_id": item["task_id"], "role": item["role"],
+                                     "error_excerpt": str(item.get("error") or "")[:400]}
+                                    for item in failed_tasks[-8:]],
+                "read_policy": "Use rsi_status with task_id to inspect each failure and its published handoff file IDs. "
+                               "reviewed_failures on stop must name tasks whose status is failed, not completed Runner tasks "
+                               "with a failed Run. A replacement stop replaces the acknowledgement list: include all eligible "
+                               "failed task IDs after review, retaining supported earlier acknowledgements as well as newly reviewed failures. "
+                               "Do not invent review reasons or repeat experiments; the coordinator owns the research decision."}
         if task["scope"].get("task_kind") == "problem_reframe":
             context.update({"events": [], "tasks": [], "hypotheses": [], "candidates": [], "runs": [],
                             "idea_runs": [],

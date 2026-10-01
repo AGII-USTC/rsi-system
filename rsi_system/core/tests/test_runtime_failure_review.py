@@ -1,6 +1,7 @@
 """A stop acknowledges only the task failures explicitly reviewed in that decision."""
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import sqlite3
 from threading import Barrier
 
@@ -8,6 +9,8 @@ import pytest
 
 from rsi_system.core.runtime_store import RuntimeStore
 from rsi_system.core.runtime_types import MissionSpec
+from rsi_system.core.runtime import RuntimeCoordinator
+from .test_orchestrator import project
 
 
 def _failed_task(store, mission_id="m"):
@@ -154,3 +157,100 @@ def test_old_deferred_stop_schema_migrates_without_acknowledging_failures(tmp_pa
         store.db.commit()
     with RuntimeStore(path) as store:
         assert store.unreviewed_deferred_failures("m") == [old["task_id"]]
+
+
+def _provisional_stop_runtime(tmp_path, budget=8):
+    runtime = RuntimeCoordinator(project(tmp_path))
+    runtime.start(MissionSpec("m", "Review failures", resources={"max_agent_tasks": budget}))
+    with RuntimeStore(runtime.store_path) as store:
+        failed = _failed_task(store)
+        actor = _coordinator(store)
+        store.apply_coordinator_decision(actor, _stop(), [])
+    return runtime, failed
+
+
+def _review_response(reviewed=()):
+    return {**_stop(reviewed), "expected_information": "none",
+            "budget_impact": "one review, no repeated experiment", "stop_condition": "review complete"}
+
+
+def test_missing_stop_review_gets_indexed_feedback_then_can_stop(tmp_path):
+    runtime, failed = _provisional_stop_runtime(tmp_path)
+    scheduled = runtime.tick(require_model=False)
+    assert scheduled["reason"] == "stop_failure_review"
+    with RuntimeStore(runtime.store_path) as store:
+        assert store.mission("m")["status"] == "active"
+        assert store.unreviewed_deferred_failures("m") == [failed["task_id"]]
+        assert store.remaining_agent_tasks("m") == 5
+
+    def review(**kwargs):
+        context = json.loads(kwargs["prompt"].split("\n", 1)[1])["context"]
+        inventory = context["stop_failure_review"]
+        assert inventory["eligible_failed_task_ids"] == [failed["task_id"]]
+        assert inventory["unreviewed_failed_task_ids"] == [failed["task_id"]]
+        assert inventory["recent_failures"][0]["task_id"] == failed["task_id"]
+        return _review_response([failed["task_id"]])
+
+    assert runtime.tick(agent_runner=review, require_model=False)["status"] == "completed"
+    with RuntimeStore(runtime.store_path) as store:
+        assert store.mission("m")["status"] == "stopped"
+        assert store.task(failed["task_id"]) == failed
+        assert store.remaining_agent_tasks("m") == 5
+
+
+def test_completed_runner_is_not_eligible_failed_task(tmp_path):
+    runtime = RuntimeCoordinator(project(tmp_path))
+    runtime.start(MissionSpec("m", "Distinguish task and Run outcomes"))
+    with RuntimeStore(runtime.store_path) as store:
+        failed = _failed_task(store)
+        runner = store.create_task("m", "runner", "Run diagnostic", "Test")
+        claimed = store.claim_task("m")
+        assert claimed["task_id"] == runner["task_id"]
+        store.finish_task(runner["task_id"], claimed["lease_token"],
+                          {"run_id": "run-failed", "status": "failed"})
+        actor = _coordinator(store)
+        context = json.loads(runtime._prompt("coordinator", store.mission("m"), actor, store)
+                             .split("\n", 1)[1])["context"]["stop_failure_review"]
+        assert context["eligible_failed_task_ids"] == [failed["task_id"]]
+        assert context["unreviewed_failed_task_ids"] == []
+
+
+def test_unresolved_stop_review_is_bounded_and_preserves_failures(tmp_path):
+    runtime, failed = _provisional_stop_runtime(tmp_path)
+    assert runtime.tick(require_model=False)["reason"] == "stop_failure_review"
+    assert runtime.tick(agent_runner=lambda **_: _review_response(), require_model=False)["status"] == "completed"
+    result = runtime.tick(require_model=False)
+    assert result["reason"] == "deferred_stop_task_failed"
+    with RuntimeStore(runtime.store_path) as store:
+        assert store.mission("m")["status"] == "paused"
+        assert store.task(failed["task_id"]) == failed
+        assert len([e for e in store.events("m") if e["kind"] == "stop_failure_review_requested"]) == 1
+        # Explicit operator review opens a new bounded window and retains the provisional stop.
+        store.set_mission_status("m", "active", reason="Operator approved one further review")
+    assert runtime.tick(require_model=False)["reason"] == "stop_failure_review"
+
+
+def test_stop_failure_feedback_does_not_exceed_budget(tmp_path):
+    runtime, failed = _provisional_stop_runtime(tmp_path, budget=2)
+    assert runtime.tick(require_model=False)["reason"] == "deferred_stop_task_failed"
+    with RuntimeStore(runtime.store_path) as store:
+        assert store.mission("m")["status"] == "paused"
+        assert store.remaining_agent_tasks("m") == 0
+        assert len(store.list_tasks("m")) == 2
+        assert store.task(failed["task_id"]) == failed
+
+
+@pytest.mark.parametrize("decision", ["wait", "schedule"])
+def test_failure_review_coordinator_can_choose_to_continue(tmp_path, decision):
+    runtime, failed = _provisional_stop_runtime(tmp_path)
+    assert runtime.tick(require_model=False)["reason"] == "stop_failure_review"
+    response = {**_review_response(), "decision": decision,
+                "summary": "More evidence is needed before deciding to stop"}
+    if decision == "schedule":
+        response["tasks"] = [{"role": "researcher", "objective": "Review the unresolved question",
+                               "reason": "Coordinator chooses further research"}]
+    assert runtime.tick(agent_runner=lambda **_: response, require_model=False)["status"] == "completed"
+    with RuntimeStore(runtime.store_path) as store:
+        assert store.mission("m")["status"] == ("active" if decision == "schedule" else "paused")
+        assert store.deferred_stop("m") is None
+        assert store.task(failed["task_id"]) == failed

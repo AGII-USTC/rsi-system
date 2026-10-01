@@ -60,6 +60,8 @@ def schedule_response_repair(coordinator, store, task, exc):
                       or error.startswith("coordinator must")
                       or error.startswith("stop_reframe_decision")
                       or error.startswith("deferred stop reframe")
+                      or error.startswith("reviewed failure")
+                      or error.startswith("reviewed_failures")
                       or error.startswith("decision correction")
                       or error.startswith("agent response must be one JSON object"))
     if not protocol_error:

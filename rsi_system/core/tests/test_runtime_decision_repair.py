@@ -79,7 +79,8 @@ def test_protocol_rejection_gets_local_error_and_bounded_repair(tmp_path, reject
         prompt = runtime._prompt('coordinator', store.mission('m'), repair, store)
         assert 'Correct one rejected coordinator response' in prompt
         assert str(rejected) not in prompt  # raw response remains in its receipt, not copied into the prompt
-        assert 'coordinator decision must be schedule, wait, or stop' in prompt
+        error = store.task(original['task_id'])['error']
+        assert error.removeprefix('ValueError: ') in prompt
         assert 'communications_index' in prompt
         assert 'source_audit_receipts' in prompt
         def corrected(**kwargs):
@@ -94,6 +95,31 @@ def test_protocol_rejection_gets_local_error_and_bounded_repair(tmp_path, reject
         assert store.mission('m')['status'] == 'active'
         assert store.task(original['task_id'])['status'] == 'failed'
         assert len([t for t in store.list_tasks('m') if t['status'] == 'queued']) == 0
+
+
+def test_invalid_failure_acknowledgement_gets_local_repair(tmp_path):
+    runtime = RuntimeCoordinator(project(tmp_path))
+    runtime.start(MissionSpec('m', 'Review failures', resources={'max_agent_tasks': 5}))
+    with RuntimeStore(runtime.store_path) as store:
+        store.create_task('m', 'coordinator', 'Review', 'Decide')
+        actor = store.claim_task('m')
+        result = runtime._execute(store, store.mission('m'), actor, require_model=False,
+            agent_runner=lambda **_: {'decision': 'stop', 'summary': 'Review failed Run',
+                'expected_information': 'none', 'budget_impact': 'none', 'stop_condition': 'done',
+                'reviewed_failures': [{'task_id': 'task-missing', 'reason': 'Failed Run inspected'}]})
+        assert result['status'] == 'task_failed'
+        assert 'reviewed failure must be a failed task in this Mission' in store.task(actor['task_id'])['error']
+        queued = [t for t in store.list_tasks('m') if t['status'] == 'queued']
+        assert len(queued) == 1
+        assert repair_source(store, queued[0])['source_task_id'] == actor['task_id']
+        repair = claim_repair(store)
+        prompt = runtime._prompt('coordinator', store.mission('m'), repair, store)
+        assert 'reviewed failure must be a failed task in this Mission' in prompt
+        corrected = runtime._execute(store, store.mission('m'), repair, require_model=False,
+            agent_runner=lambda **_: {'decision': 'wait', 'summary': 'Task references need normal review'})
+        assert corrected['status'] == 'completed'
+        assert store.task(actor['task_id'])['status'] == 'failed'
+        assert len(store.list_tasks('m')) == 2
 
 
 def test_repair_accepts_explicit_empty_dispatch_fields(tmp_path):
