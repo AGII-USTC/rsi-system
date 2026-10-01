@@ -412,6 +412,20 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
     if invocation_error is not None:
         raise invocation_error
     if submission_task is not None:
+        # Pi can exit successfully after a provider-level error. Preserve its
+        # cause instead of reporting every interrupted Curator as a protocol error.
+        last_assistant = None
+        with stdout_path.open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if event.get("type") == "message_end" and event.get("message", {}).get("role") == "assistant":
+                    last_assistant = event["message"]
+        if last_assistant and last_assistant.get("stopReason") == "error":
+            raise ValueError("Pi provider invocation failed before Wiki submission: "
+                             + str(last_assistant.get("errorMessage") or "unknown provider error"))
         raise ValueError("curator did not submit Wiki paths with rsi_wiki_submit")
     payload, usage = final_payload(stdout_path)
     result = {"role": role, "payload": payload, "usage": usage, "tool_calls": tool_receipts(stdout_path),

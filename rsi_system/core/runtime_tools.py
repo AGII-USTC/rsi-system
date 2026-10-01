@@ -826,8 +826,11 @@ class ToolBridge:
                     elif tool == "rsi_research_checkpoint":
                         response = {"ok": True, **self._research_checkpoint(store, parent, operation_args)}
                     elif tool == "rsi_wiki_check":
-                        if parent["role"] != "curator" or operation_args:
-                            raise ValueError("Wiki preflight is available to curators without arguments")
+                        if (parent["role"] != "curator" or set(operation_args) - {"reason"}
+                                or ("reason" in operation_args and
+                                    (not isinstance(operation_args["reason"], str)
+                                     or len(operation_args["reason"]) > 4000))):
+                            raise ValueError("Wiki preflight is available to curators with only an optional text reason")
                         response = {"ok": True, **preflight_curator_pages(self.coordinator.root, store, parent)}
                     elif tool == "rsi_wiki_submit":
                         response = {"ok": True, **submit_curator_pages(self.coordinator.root, store, parent, operation_args)}

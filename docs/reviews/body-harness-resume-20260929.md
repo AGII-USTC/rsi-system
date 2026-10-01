@@ -292,3 +292,15 @@ AIHub通过代理可达；Gemini域名通过代理仍超时，但直连返回预
 确认paused/version1001且无queued/running后，备份数据库与环境，version1002按既有授权补足剩余48模型任务/12实验，历史140个模型任务和9个Runner保留，累计上限188/21；1003发送错误原因和历史交接索引，1004恢复同一个Mission。模型路由、思维强度、并发、不限时及Pi原生上下文管理均未变。激活记录 `.rsi/deployment/campus-network-resume-20261002.json`，备份 `.rsi/deployment/backups/campus-network-20261001T170930Z/`。
 
 北京时间约01:10实查为active/version1006，Curator `task-140d214d64072fac8589` 正在运行，已经有4次真实assistant回复和4次read，未见模型错误。证据 `.rsi/deployment/campus-network-live-20261002.json` 与该任务原始事件流。这里确认的是模型和工具链路恢复，尚未确认Wiki发布、新的正式Run或科学收益。每小时跟进恢复ACTIVE。
+
+## 2026-10-02 Curator 接续修复与 SSH 阻塞
+
+北京时间02:00已核验：原Mission paused/version1011、无queued/running，剩余46模型任务/12实验。此次暂停来自两个Curator失败，而非科学结论。`task-140d214d64072fac8589`已写4份Wiki草稿及`progress_note.md`，`rsi_wiki_check`附带reason被空参数schema拒绝，后续模型返回`Request timed out.`；`task-f9274b631b4fefb36e08`将read调用写成普通文本，未提交，冻结输入缺少前次草稿的显式索引。原草稿保存在任务workspace及已发布communications/outbox快照中，未删除或改写。
+
+用户要求的Curator路由已单独生效为`aihub/gpt-6.1-sol/medium`，普通Researcher仍为high。服务器配置核验记录为`.rsi/deployment/curator-sol61-medium-20261001T180044Z.json`。这一步没有恢复Mission。
+
+本地修复：Wiki预检接受可选的说明reason（仍拒绝未知参数）；新Curator输入提供只读快照中的草稿/进度路径、哈希和最近失败摘要，空产物重试不会遮住前一轮草稿；明确要求实际工具调用与有效提交回执。新代码不自动发布旧稿，仍要求Curator检查来源和当前Wiki基准。Pi正常退出但最后assistant为provider error时保留超时原因，不再一律归为“未提交Wiki”。未增加时限、上下文截断或科学路线限制。
+
+本地Curator、提交恢复与runtime tools相关回归通过（1项服务器布局依赖的Pi集成测试跳过）。另用本机已安装Pi的真实`validateToolArguments`回放原始失败参数：空对象与原reason均通过，未知path、对象reason和超长reason均拒绝。这是原参数回放和模拟故障回归，尚不是服务器完整失败日志回放，更不是新科学结果。
+
+本轮02:28后，SSH经`100.74.14.89:22`重复超时，Tailscale ping两次无响应；已知校园网地址`202.38.76.43:22`同样超时。本机Tailscale显示Running，Peer标记Online，但不能据此断言服务器SSH可达或判断断电、路由等具体根因。无法读取新的Mission状态，也未向服务器写入本轮修复、修改预算或恢复Mission。部署需待服务器连接恢复后，核对实际legacy入口差异、备份并验证再执行；当前不能宣称部署完成。

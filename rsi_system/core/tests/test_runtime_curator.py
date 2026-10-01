@@ -580,6 +580,12 @@ def test_wiki_preflight_checks_editable_yaml_drafts_without_publishing(tmp_path)
         valid = bridge.call({"tool": "rsi_wiki_check", "call_id": "valid", "args": {}})
         assert valid["ok"] is True
         assert valid["source_event_ids"]
+        explained = bridge.call({"tool": "rsi_wiki_check", "call_id": "with-reason", "args": {
+            "reason": "Validate new and revised wiki proposals for the body memory reframe and internal reader execution boundary"}})
+        assert explained["ok"] is True
+        for args in ({"reason": 1}, {"reason": "x" * 4001}, {"path": "/tmp/other"}):
+            denied = bridge.call({"tool": "rsi_wiki_check", "call_id": "bad-" + str(len(str(args))), "args": args})
+            assert denied["ok"] is False
         assert not (root / "knowledge/findings/draft.md").exists()
         assert _source_paths(_frontmatter(proposal.read_text())) == [source(author)]
         proposal.write_text(proposal.read_text().replace("title: Memory mechanism",
@@ -626,10 +632,17 @@ let gate;
 guard({on(name, fn) { if(name === 'tool_call') gate = fn; }, registerTool() {}});
 let tool;
 extension({on() {}, registerTool(value) { if(value.name === 'rsi_wiki_check') tool = value; }});
+const { createRequire } = await import('node:module');
+const { homedir } = await import('node:os');
+const require = createRequire(homedir()+'/.local/share/rsi/pi/node_modules/@earendil-works/pi-coding-agent/package.json');
+const { Value } = require('typebox/value');
+const args = {reason:'Validate new and revised wiki proposals for the body memory reframe and internal reader execution boundary'};
+if (!Value.Check(tool.parameters, args)) throw Error('original arguments rejected');
+if (Value.Check(tool.parameters, {path:'/tmp/other'})) throw Error('unknown argument accepted');
 if (!process.env.ACTIVE_TOOLS.split(',').includes(tool.name)) throw Error('tool not enabled');
 const denied = await gate({toolName:tool.name,input:{}});
 if (denied?.block) throw Error(denied.reason);
-console.log(JSON.stringify(await tool.execute('preflight', {})));
+console.log(JSON.stringify(await tool.execute('preflight', args)));
 ''')
         with serve_tools(root, task["task_id"]) as (socket, _):
             result = subprocess.run([node, "--experimental-strip-types", str(script)],
@@ -702,3 +715,40 @@ def test_curator_reads_cross_branch_handoffs_and_verified_inventory(tmp_path):
     extension = Path(__file__).resolve().parents[3] / "deployment/rsi/pi-runtime-tools.ts"
     assert '"curator"' in extension.read_text()
     assert 'register("rsi_wiki_check"' in extension.read_text()
+
+
+def test_curator_retry_exposes_frozen_drafts_after_empty_failure(tmp_path):
+    from rsi_system.core.runtime_curator import curator_retry_context
+    root, coordinator = setup(tmp_path)
+    with RuntimeStore(coordinator.store_path) as store:
+        author = published(root, store)
+        failed = []
+        for files, error in [({'progress_note.md': 'Read through source 3.',
+                              'wiki/findings/retry.md': page(author)}, 'Request timed out.'),
+                             ({}, 'curator did not submit Wiki paths with rsi_wiki_submit')]:
+            store.create_task('wiki-mission', 'curator', 'organize', 'fixture')
+            task = store.claim_task('wiki-mission')
+            failed.append(task)
+            directory = root / '.rsi/runtime/tasks' / task['task_id']
+            for relative, content in files.items():
+                target = directory / 'workspace' / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content)
+            frozen = snapshot_communications(task, directory, {'error': error})
+            publish_communications(store, task, frozen, 'failed')
+            store.finish_task(task['task_id'], task['lease_token'], {'error': error}, status='failed')
+        store.set_mission_status('wiki-mission', 'active', reason='reviewed execution failure')
+        task = store.create_task('wiki-mission', 'curator', 'continue', 'fixture')
+        directory = root / '.rsi/runtime/tasks' / task['task_id']
+        inbox = prepare_communications(store, task, directory)
+        retry = curator_retry_context(store, task, inbox)
+        assert [x['task_id'] for x in retry['failed_attempts']] == [x['task_id'] for x in failed]
+        drafts = retry['drafts_and_progress']
+        assert {x['workspace_path'] for x in drafts} == {'progress_note.md', 'wiki/findings/retry.md'}
+        assert all(x['task_id'] == failed[0]['task_id'] for x in drafts)
+        assert all(Path(x['path']).is_relative_to(inbox.parent) for x in drafts)
+        assert all(hashlib.sha256(Path(x['path']).read_bytes()).hexdigest() == x['sha256'] for x in drafts)
+        context = curator_prompt_context(coordinator._prompt('curator', store.mission('wiki-mission'), task, store,
+                                                             communication_manifest=inbox))
+        assert context['curation']['retry'] == retry
+        assert not list((directory / 'workspace').rglob('*.md'))

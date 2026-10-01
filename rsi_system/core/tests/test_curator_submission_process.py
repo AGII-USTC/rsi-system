@@ -219,3 +219,13 @@ def test_nonzero_pi_exit_without_a_valid_submission_cannot_complete(process_fixt
             assert json.loads(operations[0]["response_json"])["ok"] is False
         assert pending_record_ids(store, "wiki-mission")
     assert not (root / "knowledge/findings/submitted.md").exists()
+
+
+def test_curator_zero_exit_retains_provider_timeout(process_fixture):
+    root, coordinator, author = process_fixture
+    executable = fake_pi(root, author, 'none')
+    executable.write_text(executable.read_text().replace("if mode == 'none':\n    sys.exit(7)",
+        "if mode == 'none':\n    emit({'type':'message_end','message':{'role':'assistant','stopReason':'error','errorMessage':'Request timed out.'}})\n    sys.exit(0)"))
+    outcome = run_process(coordinator, executable, {})
+    assert outcome['status'] == 'task_failed'
+    assert 'Pi provider invocation failed before Wiki submission: Request timed out.' in outcome['error']

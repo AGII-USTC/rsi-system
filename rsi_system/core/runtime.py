@@ -16,7 +16,7 @@ from .runtime_store import RuntimeStore
 from .runtime_research import research_root_id
 from .runtime_portfolio import build_portfolio_context, validate_exploration_review
 from .runtime_knowledge import reconcile_runtime_knowledge
-from .runtime_curator import archive_records, curator_document_index, pending_record_ids, wiki_inventory
+from .runtime_curator import archive_records, curator_document_index, curator_retry_context, pending_record_ids, wiki_inventory
 from .runtime_evidence import (build_evidence_bundle, register_curator_index,
                                build_external_readonly_manifest)
 from .runtime_context import compile_prompt_context
@@ -577,6 +577,7 @@ class RuntimeCoordinator:
                                    "wiki_inventory": wiki_inventory(self.root, task),
                                    "document_index": document_index,
                                    "pending_source_event_ids": pending_ids,
+                                   "retry": curator_retry_context(store, task, communication_manifest),
                                    "prior_rejections": [event["payload"] for event in store.events(mission["mission_id"])
                                                         if event["kind"] == "knowledge_curation_rejected"],
                                    "proposal_directory": str(self.runtime_root / "tasks" / task["task_id"] /

@@ -228,7 +228,8 @@ export default function (pi: any) {
     Type.Object({ task_id: Type.String(), file_id: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 0 })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 12000 })) }));
   register("rsi_wiki_check", "Validate your editable Wiki proposals before finishing; returns correctable source, schema, and link errors.",
-    Type.Object({}, { additionalProperties: false }));
+    Type.Object({ reason: Type.Optional(Type.String({ maxLength: 4000,
+      description: "Optional explanation for the check; does not change validation." })) }, { additionalProperties: false }));
   if (process.env.RSI_AGENT_ROLE === "curator") {
     pi.registerTool({
       name: "rsi_wiki_submit", label: "rsi_wiki_submit", executionMode: "sequential",

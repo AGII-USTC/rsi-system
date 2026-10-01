@@ -87,6 +87,40 @@ def _record_events(store, mission_id: str, *, include_coordinator: bool = False)
     return events
 
 
+def curator_retry_context(store, task: dict, manifest_path: Path | None) -> dict:
+    """Point retries at frozen drafts, without replaying logs or trusting claims."""
+    failures = [item for item in store.list_tasks(task["mission_id"])
+                if item["role"] == "curator" and item["status"] == "failed"
+                and item["input_version"] <= task["input_version"]]
+    files, authors = [], []
+    if manifest_path is not None:
+        manifest = load_manifest(manifest_path, task)
+        # Inbox order is newest publication first. An empty failed retry must
+        # not hide the preceding attempt that actually wrote drafts.
+        for item in manifest["files"]:
+            if (item.get("author_role") != "curator" or item.get("task_status") != "failed"
+                    or item.get("origin") != "agent_workspace"):
+                continue
+            author = item["author_task_id"]
+            if author not in authors:
+                if len(authors) >= 2:
+                    continue
+                authors.append(author)
+            files.append({"task_id": author, "path": str(manifest_path.parent / item["path"]),
+                          "workspace_path": item["workspace_path"], "sha256": item["sha256"]})
+    return {"failed_attempts": [{"task_id": item["task_id"],
+                                  "error": str(item.get("error") or "")[:1200]}
+                                 for item in failures[-2:]],
+            "drafts_and_progress": files,
+            "inbox_manifest": str(manifest_path) if manifest_path else None,
+            "instructions": "Inspect previous progress and reusable drafts before rereading sources. These are "
+                            "read-only, unverified handoffs, not published Wiki evidence. Copy chosen content into "
+                            "your own workspace and check current sources and Wiki base hashes before submitting. "
+                            "Call actual tools; text such as call:default_api:read does not execute a tool. "
+                            "rsi_wiki_check accepts {} or an optional reason; correct returned errors. "
+                            "Finish with an accepted rsi_wiki_submit receipt; final prose cannot replace it."}
+
+
 def pending_record_ids(store, mission_id: str, *, through_version: int | None = None) -> list[int]:
     curated = {source_id for event in store.events(mission_id) if event["kind"] == "knowledge_curated"
                for source_id in event["payload"]["source_event_ids"]}
