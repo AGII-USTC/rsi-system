@@ -16,7 +16,11 @@ def _excerpt(value: Any, limit: int) -> str:
 
 
 def compile_prompt_context(context: dict, evidence_manifest: Path, task: dict,
-                           *, max_inline_bytes: int = 96000) -> dict:
+                           *, max_inline_bytes: int = 48000) -> dict:
+    # Historical context is only one part of the request. Leave room for Pi's
+    # system/tool schemas, role instructions, and a recent source page when a
+    # 256k model reserves 128k for output. The request guard remains authoritative;
+    # complete records stay available through the frozen source references.
     manifest_path = Path(evidence_manifest).resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest["task_id"] != task["task_id"] or manifest["mission_id"] != task["mission_id"]:
@@ -51,8 +55,10 @@ def compile_prompt_context(context: dict, evidence_manifest: Path, task: dict,
     compact = copy.deepcopy(context)
     compact["context_sources"] = {
         "full_context_ref": ref(""),
-        "note": "Verbatim excerpts and record addresses only. Read full records as needed with read; "
-                "json_pointer identifies the record within JSON; read uses line offset/limit for paging. "
+        "note": "Start from this task, its constraints, and source indexes; do not read all history upfront. "
+                "Use rsi_read_source(path, sha256, json_pointer, offset, max_bytes) for only the records needed "
+                "for the next decision; continue with next_offset and the returned hash. Read ordinary files "
+                "with read(path, offset, limit). Previews are incomplete, not the entire research record. "
                 "Array order is recorded order, not a scientific ranking. Runtime database records are unchanged."}
     tasks = []
     all_tasks = context.get("tasks", [])
@@ -129,32 +135,54 @@ def compile_prompt_context(context: dict, evidence_manifest: Path, task: dict,
                                             "latest_review_event_version", "latest_final_review_feedback_version")
             if key in portfolio}
         compact["exploration_portfolio"]["source_ref"] = ref("/exploration_portfolio")
+    knowledge = context.get("knowledge")
+    if isinstance(knowledge, dict):
+        compact["knowledge"] = {**knowledge, "source_ref": ref("/knowledge"),
+            "results": [{key: item[key] for key in ("path", "title", "status", "sha256") if key in item}
+                        for item in knowledge.get("results", [])],
+            "read_policy": "This is a file index, not paper or Wiki evidence. Select relevant paths and "
+                           "read their conditions, counterexamples, and evidence before relying on them."}
+    communications = compact.get("communications")
+    if isinstance(communications, dict):
+        files = communications.get("available_files", [])
+        communications["available_files"] = [item for index, item in enumerate(files)
+            if item.get("author_role") == "human" or index >= len(files) - 4]
+        communications["available_files_count"] = len(files)
+        communications["available_files_ref"] = ref("/communications/available_files")
+        communications["read_policy"] = ("Read inbox_manifest for the full file index; choose files by "
+                                          "task responsibility. This preview is not all available handoffs.")
 
-    # Recency and pending status bound presentation without assigning scientific value.
+    # Always start with small indexes, even when all historical records would fit.
+    # Keep active work visible; recency is a navigation aid, not scientific value.
+    compact["context_sources"]["task_count"] = len(tasks)
+    compact["context_sources"]["tasks_ref"] = ref("/tasks")
+    compact["tasks"] = [item for index, item in enumerate(tasks)
+                        if item["status"] in {"queued", "running"} or index >= len(tasks) - 6]
+    for field in identities:
+        compact["context_sources"][field + "_count"] = len(context.get(field, []))
+        compact["context_sources"][field + "_ref"] = ref("/" + field)
+        compact[field] = compact[field][-4:]
+    for field in graph_fields:
+        graph_view[field + "_count"] = len(graph.get(field, []))
+        graph_view[field + "_ref"] = ref("/research_graph/" + field)
+        graph_view[field] = graph_view[field][-6:]
+    if "composition_sources" in graph_view:
+        sources = graph.get("composition_sources", [])
+        graph_view["composition_sources_count"] = len(sources)
+        graph_view["composition_sources_ref"] = ref("/research_graph/composition_sources")
+        graph_view["composition_sources"] = [{
+            "input": item.get("input"),
+            "task_count": len(item.get("tasks", [])),
+            "source_ref": ref(f"/research_graph/composition_sources/{index}")}
+            for index, item in enumerate(sources) if index >= len(sources) - 6]
+
     def size() -> int:
         return len(json.dumps(compact, ensure_ascii=False).encode("utf-8"))
 
     if size() > max_inline_bytes:
-        compact["tasks"] = [item for index, item in enumerate(tasks)
-                            if item["status"] in {"queued", "running"} or index >= len(tasks) - 24]
-        compact["context_sources"]["task_count"] = len(tasks)
-        compact["context_sources"]["tasks_ref"] = ref("/tasks")
-        for field in identities:
-            if len(compact[field]) > 24:
-                compact["context_sources"][field + "_count"] = len(compact[field])
-                compact["context_sources"][field + "_ref"] = ref("/" + field)
-                compact[field] = compact[field][-24:]
-    if size() > max_inline_bytes:
-        for field in graph_fields:
-            items = graph_view[field]
-            if len(items) > 24:
-                graph_view[field + "_count"] = len(items)
-                graph_view[field + "_ref"] = ref("/research_graph/" + field)
-                graph_view[field] = items[-24:]
-    if size() > max_inline_bytes:
         compact["context_sources"]["tasks_ref"] = ref("/tasks")
         compact["context_sources"]["task_count"] = len(tasks)
-        for recent_limit in (12, 6, 0):
+        for recent_limit in (3, 0):
             compact["tasks"] = [item for index, item in enumerate(tasks)
                                 if item["status"] in {"queued", "running"}
                                 or (recent_limit > 0 and index >= len(tasks) - recent_limit)]

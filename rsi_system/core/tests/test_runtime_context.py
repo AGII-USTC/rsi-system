@@ -124,7 +124,56 @@ def test_context_compilation_does_not_change_recorded_task_results(tmp_path):
         assert store.db.total_changes == before_changes
         assert store.list_tasks("m") == before
         assert store.task(child["task_id"])["output"] == result
-        assert source_record(compact["context_sources"]["full_context_ref"])["tasks"] == before
+    assert source_record(compact["context_sources"]["full_context_ref"])["tasks"] == before
+
+
+def test_initial_coordinator_view_leaves_room_for_high_output_model_and_source_page(tmp_path):
+    task = {"task_id": "coordinator-resumed", "mission_id": "m", "role": "coordinator",
+            "status": "running", "input_version": 891, "scope": {}}
+    context = {"task": task, "mission": {"mission_id": "m", "objective": "Continue research"},
+        "knowledge": {"index": "k" * 12000}, "communications": {"index": "c" * 7500},
+        "tasks": [{"task_id": f"research-{i}", "role": "researcher", "status": "completed",
+                   "output": {"payload": {"summary": "s" * 512}}} for i in range(24)],
+        "events": [{"event_id": i, "version": i, "kind": "result",
+                    "payload": {"summary": "e" * 384}} for i in range(24)],
+        "research_graph": {"mission_id": "m", "root_node_id": "node-0",
+            "nodes": [{"node_id": f"node-{i}", "revision": 1,
+                       "question": "q" * 384, "summary": "s" * 512} for i in range(20)],
+            "relations": [], "compositions": []}}
+    manifest = manifest_for(tmp_path / "bundle", task)
+    compact = compile_prompt_context(context, manifest, task)
+    source = compact["context_sources"]["full_context_ref"]
+    assert source_record(source) == context
+    assert compact["task"] == task
+    assert compact["mission"] == context["mission"]
+    assert compact["research_graph"]["root_node_id"] == "node-0"
+    # Pi's system/tool schemas and role instructions are additional to the
+    # inline historical context. Keep space for one bounded source-page result.
+    messages = [{"role": "system", "content": "system/tool schemas " + "t" * 28000},
+        {"role": "user", "content": [{"type": "text", "text":
+            "role instructions " + "i" * 18500 + json.dumps(compact, ensure_ascii=False)}]}]
+    result, receipt = run_guard(tmp_path, '''
+const model = {contextWindow:256000, maxTokens:128000, api:'openai-responses'};
+const initial = hooks.context_with_system({messages:request.messages}, {model});
+const initialBody = hooks.before_provider_request({payload:{input:initial.messages}}, {model});
+const followup = [...initial.messages,
+  {role:'assistant',content:[{type:'toolCall',id:'source-page',name:'rsi_read_source',
+    arguments:{path:request.source.path,sha256:request.source.sha256}}]},
+  {role:'toolResult',toolCallId:'source-page',toolName:'rsi_read_source',
+    content:[{type:'text',text:'p'.repeat(16384)}]}];
+const continued = hooks.context_with_system({messages:followup}, {model});
+hooks.before_provider_request({payload:{input:continued.messages}}, {model});
+console.log(JSON.stringify({initial:initial.messages, continued:continued.messages,
+  max_output_tokens:initialBody.max_output_tokens}));
+''', limit=256000, payload={"messages": messages, "source": source})
+    assert result.returncode == 0, result.stderr
+    response = json.loads(result.stdout)
+    assert response["initial"] == messages
+    assert response["continued"][:2] == messages
+    assert response["max_output_tokens"] == 128000
+    checks = [json.loads(line) for line in receipt.read_text().splitlines()]
+    assert len(checks) == 2
+    assert all(check["allowed"] and check["json_bytes"] + 128000 <= 256000 for check in checks)
 
 
 @pytest.mark.parametrize("role", ["researcher", "analyzer", "critic", "curator"])
@@ -162,8 +211,11 @@ def test_role_context_preserves_assigned_graph_and_responsibility_fields(tmp_pat
 
     compact = compile_prompt_context(context, manifest, task)
 
-    for key in ("assigned_node", "relations", "composition_sources", "frozen_source_tasks", "composition_lineage"):
+    for key in ("assigned_node", "relations", "frozen_source_tasks", "composition_lineage"):
         assert compact["research_graph"][key] == graph[key]
+    projected = compact["research_graph"]["composition_sources"][0]
+    assert projected["input"] == graph["composition_sources"][0]["input"]
+    assert source_record(projected["source_ref"]) == graph["composition_sources"][0]
     for key in ("task", "research_mandate", "curation", "evidence_manifest", "external_readonly_manifest", "mission"):
         assert compact[key] == context[key]
     assert context == before
@@ -171,6 +223,45 @@ def test_role_context_preserves_assigned_graph_and_responsibility_fields(tmp_pat
     assert source_record(compact["tasks"][0]["source_ref"]) == context["tasks"][0]
     assert source_record(compact["events"][0]["source_ref"]) == context["events"][0]
     assert source_record(compact["runs"][0]["source_ref"]) == context["runs"][0]
+
+
+def test_source_indexes_are_bounded_before_context_is_full(tmp_path):
+    task = {"task_id": "task-a", "mission_id": "m", "input_version": 9,
+            "role": "researcher", "status": "running", "scope": {}}
+    tasks = [{"task_id": f"task-{i}", "role": "researcher",
+              "status": "running" if i == 0 else "completed",
+              "output": {"payload": {"summary": f"result-{i}"}}} for i in range(20)]
+    files = [{"path": f"/published/{i}.md", "author_role": "human" if i == 0 else "researcher"}
+             for i in range(20)]
+    wiki = {"path": "knowledge/entry.md", "title": "Existing idea", "status": "draft",
+            "sha256": "a" * 64, "excerpt": "Do not inject the whole page",
+            "sources": ["Long historical literature and claims"]}
+    context = {"task": task, "mission": {"mission_id": "m"}, "tasks": tasks,
+        "communications": {"workspace": "/own/workspace", "inbox_manifest": "/published/manifest.json",
+                           "available_files": files},
+        "knowledge": {"results": [wiki], "status": "ok", "entry_points": {"index": "knowledge/index.md"}},
+        "events": [{"event_id": i, "version": i, "kind": "record", "payload": {}} for i in range(10)],
+        "research_graph": {"root_node_id": "node-0", "nodes": [
+            {"node_id": f"node-{i}", "revision": i, "question": "An unresolved question"} for i in range(12)]}}
+    before = deepcopy(context)
+    compact = compile_prompt_context(context, manifest_for(tmp_path, task), task, max_inline_bytes=1_000_000)
+    assert context == before
+    assert len(compact["tasks"]) == 7
+    assert compact["tasks"][0]["task_id"] == "task-0"  # older active work is still visible
+    assert len(compact["events"]) == 4
+    assert source_record(compact["events"][0]["source_ref"]) == context["events"][6]
+    assert compact["context_sources"]["task_count"] == 20
+    assert source_record(compact["context_sources"]["tasks_ref"]) == tasks
+    assert len(compact["research_graph"]["nodes"]) == 6
+    assert compact["research_graph"]["nodes_count"] == 12
+    assert source_record(compact["research_graph"]["nodes_ref"]) == context["research_graph"]["nodes"]
+    assert "excerpt" not in compact["knowledge"]["results"][0]
+    assert "sources" not in compact["knowledge"]["results"][0]
+    assert source_record(compact["knowledge"]["source_ref"])["results"][0] == wiki
+    assert len(compact["communications"]["available_files"]) == 5
+    assert compact["communications"]["available_files"][0] == files[0]
+    assert compact["communications"]["workspace"] == "/own/workspace"
+    assert source_record(compact["communications"]["available_files_ref"]) == files
 
 
 @pytest.mark.parametrize("role", ["researcher", "analyzer", "critic", "curator"])
