@@ -1,4 +1,4 @@
-"""Bounded Pi invocations; each role gets a fresh context and an auditable receipt."""
+"""Pi invocations with native context management and auditable task receipts."""
 from __future__ import annotations
 
 import hashlib
@@ -70,19 +70,20 @@ def auth_ready(executable: str, *, provider: str, model: str) -> bool:
 
 def final_payload(events: Path) -> tuple[dict, dict]:
     last, usage, last_error = None, {}, None
-    for line in events.read_text().splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError as exc:
-            raise ValueError("invalid Pi JSON event stream") from exc
-        if event.get("type") == "message_end" and event.get("message", {}).get("role") == "assistant":
-            last = event["message"]
-            if last.get("stopReason") == "error":
-                last_error = last.get("errorMessage") or last_error
-            current = last.get("usage", {})
-            for key in ("input", "output", "cacheRead", "cacheWrite", "totalTokens"):
-                if isinstance(current.get(key), (int, float)):
-                    usage[key] = usage.get(key, 0) + current[key]
+    with events.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            try:
+                event = json.loads(line)
+            except ValueError as exc:
+                raise ValueError("invalid Pi JSON event stream") from exc
+            if event.get("type") == "message_end" and event.get("message", {}).get("role") == "assistant":
+                last = event["message"]
+                if last.get("stopReason") == "error":
+                    last_error = last.get("errorMessage") or last_error
+                current = last.get("usage", {})
+                for key in ("input", "output", "cacheRead", "cacheWrite", "totalTokens"):
+                    if isinstance(current.get(key), (int, float)):
+                        usage[key] = usage.get(key, 0) + current[key]
     if not last or last.get("stopReason") in {"error", "aborted", "toolUse"}:
         if last_error:
             raise ValueError(f"Pi provider invocation failed: {last_error}")
@@ -121,26 +122,41 @@ def final_payload(events: Path) -> tuple[dict, dict]:
 
 
 def tool_receipts(events: Path) -> list[dict]:
-    return _tool_receipts(json.loads(line) for line in events.read_text().splitlines())
+    with events.open("r", encoding="utf-8") as stream:
+        return _tool_receipts(json.loads(line) for line in stream)
 
 
 def _tool_receipts(events) -> list[dict]:
-    calls, starts = [], {}
+    state = {"calls": [], "starts": {}}
     for event in events:
-        if event.get("type") == "tool_execution_start":
-            starts[event.get("toolCallId")] = event.get("args") or {}
-            continue
-        if event.get("type") != "tool_execution_end":
-            continue
-        result = event.get("result") or {}
-        details = result.get("details") if isinstance(result, dict) else None
-        call = {"tool": event.get("toolName"),
-                "succeeded": event.get("isError") is False and not (
-                    isinstance(details, dict) and (details.get("error") or details.get("successful") == 0))}
+        _consume_tool_receipt(event, state)
+    return state["calls"]
+
+
+def _consume_tool_receipt(event: dict, state: dict) -> None:
+    if event.get("type") == "tool_execution_start":
         if event.get("toolName") == "mcp":
-            call["operation"] = starts.get(event.get("toolCallId"), {}).get("tool")
-        calls.append(call)
-    return calls
+            args = event.get("args")
+            state["starts"][event.get("toolCallId")] = args.get("tool") if isinstance(args, dict) else None
+        return
+    if event.get("type") != "tool_execution_end":
+        return
+    result = event.get("result") or {}
+    details = result.get("details") if isinstance(result, dict) else None
+    call = {"tool": event.get("toolName"),
+            "succeeded": event.get("isError") is False and not (
+                isinstance(details, dict) and (details.get("error") or details.get("successful") == 0))}
+    if event.get("toolName") == "mcp":
+        call["operation"] = state["starts"].pop(event.get("toolCallId"), None)
+    state["calls"].append(call)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def recover_curator_result(root: Path, task: dict, prompt: str, *,
@@ -167,40 +183,44 @@ def recover_curator_result(root: Path, task: dict, prompt: str, *,
             raise ValueError("agent receipt does not match the curator submission")
         return result
     events_path = directory / "events.jsonl"
-    raw = events_path.read_bytes() if events_path.exists() else b""
-    events, usage = [], {}
-    # A process interruption may leave only its final JSON line unfinished.
-    lines = raw.splitlines(keepends=True)
-    for index, line in enumerate(lines):
-        try:
-            event = json.loads(line)
-        except (ValueError, UnicodeDecodeError):
-            if index == len(lines) - 1 and not line.endswith(b"\n"):
-                break
-            raise ValueError("invalid Pi JSON event stream")
-        events.append(event)
-        message = event.get("message", {})
-        if event.get("type") == "message_end" and message.get("role") == "assistant":
-            for key in ("input", "output", "cacheRead", "cacheWrite", "totalTokens"):
-                value = message.get("usage", {}).get(key)
-                if isinstance(value, (int, float)):
-                    usage[key] = usage.get(key, 0) + value
-    calls = _tool_receipts(events)
+    usage, calls_state = {}, {"calls": [], "starts": {}}
+    digest = hashlib.sha256()
+    if events_path.exists():
+        # A process interruption may leave only its final JSON line unfinished.
+        with events_path.open("rb") as stream:
+            for line in stream:
+                digest.update(line)
+                try:
+                    event = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    if not line.endswith(b"\n"):
+                        break
+                    raise ValueError("invalid Pi JSON event stream")
+                _consume_tool_receipt(event, calls_state)
+                message = event.get("message", {})
+                if event.get("type") == "message_end" and message.get("role") == "assistant":
+                    for key in ("input", "output", "cacheRead", "cacheWrite", "totalTokens"):
+                        value = message.get("usage", {}).get(key)
+                        if isinstance(value, (int, float)):
+                            usage[key] = usage.get(key, 0) + value
+    calls = calls_state["calls"]
     disabled = validate_disabled_tools("curator", disabled_tools or [])
     result = {"role": "curator", "payload": submission["payload"], "usage": usage,
               "curator_submission": submission, "completion_source": "curator_submission",
               "tool_calls": calls, "tools": [name for name in TOOLS["curator"].split(",") if name not in disabled],
               "disabled_tools": disabled, "tool_protocol_version": 1, "prompt_sha256": fingerprint,
               "started_at_unix": None, "finished_at_unix": time.time(),
-              "events_sha256": hashlib.sha256(raw).hexdigest()}
+              "events_sha256": digest.hexdigest()}
     if context_limit_tokens is not None:
         budget_path = directory / "workspace/.rsi-context-budget.jsonl"
         checks = [json.loads(line) for line in budget_path.read_text().splitlines()]
-        if not any(check.get("stage") == "provider_request" and check.get("allowed") is True for check in checks):
+        if not any(check.get("stage") == "provider_request" and (
+                check.get("allowed") is True or (check.get("management") == "pi-native"
+                and check.get("model_configuration_valid") is True)) for check in checks):
             raise ValueError("accepted curator submission has no provider context-check evidence")
         result["context_budget"] = {"limit_tokens": context_limit_tokens,
                                     "prompt_bytes": len(prompt.encode("utf-8")),
-                                    "estimation": "UTF-8 JSON bytes as a conservative input-token upper bound",
+                                    "management": "pi-native" if any(check.get("management") == "pi-native" for check in checks) else "legacy-guard",
                                     "provider_checks": checks}
     atomic_json(receipt, result)
     return result
@@ -258,15 +278,10 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
         return result
     prompt_bytes = len(prompt.encode("utf-8"))
     if context_limit_tokens is not None:
-        if type(context_limit_tokens) is not int or context_limit_tokens <= 16384:
-            raise ValueError("invalid agent context limit")
+        if type(context_limit_tokens) is not int or context_limit_tokens <= 0:
+            raise ValueError("invalid Pi context-window cap")
         if guard is None or not guard.is_file():
-            raise ValueError("agent context limit requires the Pi request guard")
-        if prompt_bytes + 16384 > context_limit_tokens:
-            atomic_json(output_dir / "context_budget.json", {
-                "limit_tokens": context_limit_tokens, "reserve_tokens": 16384,
-                "prompt_bytes": prompt_bytes, "allowed": False, "stage": "initial_prompt"})
-            raise ValueError("agent context budget exceeded before Pi invocation; inspect context_budget.json")
+            raise ValueError("agent context limit requires the Pi configuration guard")
     disabled = validate_disabled_tools(role, [] if disabled_tools is None else disabled_tools)
     active_tools = [name for name in ("read" if decision_repair else TOOLS[role]).split(",")
                     if name not in disabled]
@@ -369,12 +384,10 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
                     waited = bridge.wait_elapsed() if bridge else 0.0
                     if timeout_seconds is not None and time.monotonic() - started_mono - waited >= timeout_seconds:
                         raise TimeoutError("agent time budget exhausted")
-                    if stdout_path.stat().st_size + stderr_path.stat().st_size > 16_000_000:
-                        raise ValueError("agent output budget exhausted")
                     time.sleep(0.1)
                 if child.returncode != 0 and submission_accepted_at is None:
                     if child.returncode == 78 and context_limit_tokens is not None:
-                        raise ValueError("agent context budget exceeded before provider request; inspect workspace/.rsi-context-budget.jsonl")
+                        raise ValueError("Pi model context configuration is invalid; inspect private stage logs")
                     raise ValueError(f"Pi exited with status {child.returncode}; inspect private stage logs")
             except (ValueError, TimeoutError, OSError) as exc:
                 invocation_error = exc
@@ -398,8 +411,6 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
             return recovered
     if invocation_error is not None:
         raise invocation_error
-    if stdout_path.stat().st_size + stderr_path.stat().st_size > 16_000_000:
-        raise ValueError("agent output budget exhausted")
     if submission_task is not None:
         raise ValueError("curator did not submit Wiki paths with rsi_wiki_submit")
     payload, usage = final_payload(stdout_path)
@@ -408,16 +419,17 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
               "tool_protocol_version": 1 if runtime_root is not None and task_id is not None else 0,
               "prompt_sha256": fingerprint,
               "started_at_unix": started, "finished_at_unix": time.time(),
-              "events_sha256": hashlib.sha256(stdout_path.read_bytes()).hexdigest()}
+              "events_sha256": _sha256_file(stdout_path)}
     if context_limit_tokens is not None:
         budget_raw = budget_receipt.read_bytes() if budget_receipt.exists() else b""
         if not budget_raw.startswith(budget_prefix):
             raise ValueError("Pi context guard evidence was overwritten")
         checks = [json.loads(line) for line in budget_raw[len(budget_prefix):].decode("utf-8").splitlines()]
-        if not any(check.get("stage") == "provider_request" and check.get("allowed") is True for check in checks):
+        if not any(check.get("stage") == "provider_request" and check.get("management") == "pi-native"
+                   and check.get("model_configuration_valid") is True for check in checks):
             raise ValueError("Pi context guard produced no provider-check evidence; invocation cannot be accepted")
         result["context_budget"] = {"limit_tokens": context_limit_tokens, "prompt_bytes": prompt_bytes,
-                                    "estimation": "UTF-8 JSON bytes as a conservative input-token upper bound",
+                                    "management": "pi-native",
                                     "provider_checks": checks}
     atomic_json(receipt, result)
     return result

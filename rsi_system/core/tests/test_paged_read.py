@@ -146,32 +146,24 @@ console.log(JSON.stringify({checks,first_allowed:!before?.block,after,workspaceL
     assert "private contents" not in result.stdout
 
 
-def test_small_read_content_survives_large_details_and_old_history_projection(tmp_path):
+def test_pi_native_read_result_is_not_rewrapped_by_rsi(tmp_path):
     content = [{"type": "text", "text": "\u7814\u7a76\U0001f9ea" * 800}]
     result, _ = run_guard(tmp_path, '''
 const event = {toolName:'read',toolCallId:'old',content:request.content,details:{raw:'large details'.repeat(10000)}};
 const projection = hooks.tool_result(event);
-const messages = [
-  {role:'system',content:'system'}, {role:'user',content:[{type:'text',text:'current constraints'}]},
-  {role:'assistant',content:[{type:'toolCall',id:'old',name:'read',arguments:{path:'source'}}]},
-  {role:'toolResult',toolName:'read',toolCallId:'old',content:projection.content,details:projection.details},
-  {role:'assistant',content:[{type:'toolCall',id:'new',name:'read',arguments:{path:'source'}}]},
-  {role:'toolResult',toolName:'read',toolCallId:'new',content:[{type:'text',text:'latest'}],details:{raw:'duplicate'.repeat(100000)}}
-];
-const compact = hooks.context_with_system({messages},{model:{contextWindow:256000,maxTokens:128000}});
-console.log(JSON.stringify({projection,messages:compact.messages}));
+const archivePath = process.env.RSI_AGENT_WORKSPACE + '/.context-sources';
+const archiveCount = fs.existsSync(archivePath) ? fs.readdirSync(archivePath).length : 0;
+console.log(JSON.stringify({projection:projection ?? null,archiveCount}));
 ''', limit=256000, payload={"content": content})
     response = decode_result(result)
-    assert response["projection"]["content"] == content
-    old = next(message for message in response["messages"] if message.get("toolCallId") == "old")
-    assert old["content"] == content
-    assert source_record(response["projection"]["details"]["source_ref"])["raw"].startswith("large details")
+    assert response["projection"] is None
+    assert response["archiveCount"] == 0
 
 
-def test_archived_text_pages_are_not_archived_or_truncated_again(tmp_path):
+def test_archived_custom_text_pages_are_not_archived_or_truncated_again(tmp_path):
     text = "complete source " * 15000
     result, _ = run_guard(tmp_path, '''
-const original = {toolName:'read',toolCallId:'huge',content:[{type:'text',text:request.text}],details:{origin:'source'}};
+const original = {toolName:'web_search',toolCallId:'huge',content:[{type:'text',text:request.text}],details:{origin:'source'}};
 const projected = hooks.tool_result(original);
 const summary = JSON.parse(projected.content[0].text);
 const {tool,...args} = summary.read_source;
@@ -182,24 +174,27 @@ const repeated = hooks.tool_result({toolName:'rsi_read_source',toolCallId:'page'
 const after = count();
 const messages = [
   {role:'user',content:[{type:'text',text:'keep source constraints'}]},
-  {role:'assistant',content:[{type:'toolCall',id:'huge',name:'read',arguments:{path:'source'}}]},
+  {role:'assistant',content:[{type:'toolCall',id:'huge',name:'web_search',arguments:{path:'source'}}]},
   {role:'toolResult',...original},
   {role:'assistant',content:[{type:'toolCall',id:'page',name:'rsi_read_source',arguments:args}]},
   {role:'toolResult',toolName:'rsi_read_source',toolCallId:'page',...page}
 ];
-const compact = hooks.context_with_system({messages},{model:{contextWindow:256000,maxTokens:128000}});
-console.log(JSON.stringify({summary,page,recursive:repeated !== undefined,before,after,messages:compact.messages}));
+const payload = {input:messages};
+const provider = hooks.before_provider_request({payload},{model:{contextWindow:256000,maxTokens:128000}});
+console.log(JSON.stringify({summary,page,recursive:repeated !== undefined,before,after,messages,payload,provider}));
 ''', limit=256000, payload={"text": text})
     response = decode_result(result)
     assert response["recursive"] is False
     assert response["before"] == response["after"] == 1
     assert response["summary"]["read_source"]["json_pointer"] == "/content/0/text"
     assert source_record(response["summary"]["source_ref"])["content"][0]["text"] == text
+    assert response.get("provider") is None
+    assert response["payload"]["input"] == response["messages"]
     page = json.loads(response["page"]["content"][0]["text"])
     assert page["text"] == text[:page["next_offset"]]
     current = next(message for message in response["messages"] if message.get("toolCallId") == "page")
     assert current["content"] == response["page"]["content"]
-    assert source_record(current["details"]["source_ref"]) == response["page"]["details"]
+    assert current["details"] == response["page"]["details"]
 
 
 def test_registered_schema_is_accepted_by_installed_pi_sdk(tmp_path):
@@ -225,7 +220,7 @@ console.log(result.content[0].text);
     assert page["text"] == "installed SDK source"
 
 
-def test_context_compaction_keeps_page_when_runtime_appends_large_inbox(tmp_path):
+def test_native_provider_keeps_page_when_runtime_appends_large_inbox(tmp_path):
     source = tmp_path / "source.txt"
     source.write_text("source text " * 10000, encoding="utf-8")
     result, _ = run_guard(tmp_path, '''
@@ -237,15 +232,19 @@ const messages = [
   {role:'toolResult',toolName:'rsi_read_source',toolCallId:'page',content:[...page.content,inbox],
     details:{...page.details,raw:'runtime duplicate'.repeat(10000)}}
 ];
-const compact = hooks.context_with_system({messages},{model:{contextWindow:256000,maxTokens:128000}});
-console.log(JSON.stringify({page,inbox,messages:compact.messages}));
+const projection = hooks.tool_result(messages[2]);
+const payload = {input:messages};
+const provider = hooks.before_provider_request({payload},{model:{contextWindow:256000,maxTokens:128000}});
+console.log(JSON.stringify({page,inbox,messages,projection:projection ?? null,payload,provider}));
 ''', limit=256000, payload={"path": str(source)})
     response = decode_result(result)
-    current = next(message for message in response["messages"] if message.get("toolCallId") == "page")
+    assert response.get("provider") is None
+    assert response["payload"]["input"] == response["messages"]
+    assert response["projection"] is None
+    current = response["messages"][2]
+    assert current["content"] == response["messages"][2]["content"]
     assert current["content"][0] == response["page"]["content"][0]
-    reference = json.loads(current["content"][1]["text"])["read_source"]
-    assert reference["json_pointer"].endswith("/content/1/text")
-    assert source_record(reference) == response["inbox"]["text"]
+    assert current["content"][1] == response["inbox"]
 
 
 def test_large_sparse_source_is_rejected_before_loading_its_contents(tmp_path):

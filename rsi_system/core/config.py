@@ -34,8 +34,8 @@ def load_research_config(root: Path, *, config_dir: Path | None = None) -> dict:
         # Independent reframes execute as researchers but may use a different provider.
         validate_disabled_tools("researcher" if role == "problem_reframe" else role, tools)
     context_limit = public.setdefault("agent_context_limit_tokens", None)
-    if context_limit is not None and (type(context_limit) is not int or context_limit <= 16384):
-        raise ValueError("agent_context_limit_tokens must be null or an integer greater than the 16384 output reserve")
+    if context_limit is not None and (type(context_limit) is not int or context_limit <= 0):
+        raise ValueError("agent_context_limit_tokens must be null or a positive integer Pi context-window cap")
     for key, default in (("runtime_recovery_max_attempts", 2),
                          ("runtime_recovery_retry_seconds", 30),
                          ("runtime_recovery_max_retry_seconds", 300)):

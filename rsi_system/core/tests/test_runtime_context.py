@@ -127,7 +127,7 @@ def test_context_compilation_does_not_change_recorded_task_results(tmp_path):
     assert source_record(compact["context_sources"]["full_context_ref"])["tasks"] == before
 
 
-def test_initial_coordinator_view_leaves_room_for_high_output_model_and_source_page(tmp_path):
+def test_pi_native_provider_keeps_payload_and_records_model_configuration(tmp_path):
     task = {"task_id": "coordinator-resumed", "mission_id": "m", "role": "coordinator",
             "status": "running", "input_version": 891, "scope": {}}
     context = {"task": task, "mission": {"mission_id": "m", "objective": "Continue research"},
@@ -147,33 +147,29 @@ def test_initial_coordinator_view_leaves_room_for_high_output_model_and_source_p
     assert compact["task"] == task
     assert compact["mission"] == context["mission"]
     assert compact["research_graph"]["root_node_id"] == "node-0"
-    # Pi's system/tool schemas and role instructions are additional to the
-    # inline historical context. Keep space for one bounded source-page result.
+    # The guard must leave Pi's system/history and provider payload untouched.
     messages = [{"role": "system", "content": "system/tool schemas " + "t" * 28000},
         {"role": "user", "content": [{"type": "text", "text":
             "role instructions " + "i" * 18500 + json.dumps(compact, ensure_ascii=False)}]}]
     result, receipt = run_guard(tmp_path, '''
 const model = {contextWindow:256000, maxTokens:128000, api:'openai-responses'};
-const initial = hooks.context_with_system({messages:request.messages}, {model});
-const initialBody = hooks.before_provider_request({payload:{input:initial.messages}}, {model});
-const followup = [...initial.messages,
-  {role:'assistant',content:[{type:'toolCall',id:'source-page',name:'rsi_read_source',
-    arguments:{path:request.source.path,sha256:request.source.sha256}}]},
-  {role:'toolResult',toolCallId:'source-page',toolName:'rsi_read_source',
-    content:[{type:'text',text:'p'.repeat(16384)}]}];
-const continued = hooks.context_with_system({messages:followup}, {model});
-hooks.before_provider_request({payload:{input:continued.messages}}, {model});
-console.log(JSON.stringify({initial:initial.messages, continued:continued.messages,
-  max_output_tokens:initialBody.max_output_tokens}));
+const payload = {input:request.messages, max_output_tokens:48000};
+const before = JSON.stringify(payload);
+const returned = hooks.before_provider_request({payload}, {model});
+console.log(JSON.stringify({payload, before, returned}));
 ''', limit=256000, payload={"messages": messages, "source": source})
     assert result.returncode == 0, result.stderr
     response = json.loads(result.stdout)
-    assert response["initial"] == messages
-    assert response["continued"][:2] == messages
-    assert response["max_output_tokens"] == 128000
+    assert response["payload"] == {"input": messages, "max_output_tokens": 48000}
+    assert response["before"] == json.dumps(response["payload"], ensure_ascii=False, separators=(",", ":"))
+    assert response.get("returned") is None
     checks = [json.loads(line) for line in receipt.read_text().splitlines()]
-    assert len(checks) == 2
-    assert all(check["allowed"] and check["json_bytes"] + 128000 <= 256000 for check in checks)
+    assert len(checks) == 1
+    assert checks[0] == {
+        "stage": "provider_request", "management": "pi-native",
+        "limit_tokens": 256000, "model_context_window": 256000,
+        "model_max_tokens": 128000, "model_configuration_valid": True,
+        "checked_at": checks[0]["checked_at"]}
 
 
 @pytest.mark.parametrize("role", ["researcher", "analyzer", "critic", "curator"])
@@ -302,40 +298,33 @@ def node_command():
     return node
 
 
-def node_budget(tmp_path, payload, limit, model_max=0):
-    node = node_command()
-    script = tmp_path / "context-budget.mjs"
-    script.write_text('''import fs from 'node:fs';
-import {checkContextBudget, contextPayloadBytes} from GUARD;
-const request = JSON.parse(fs.readFileSync(0, 'utf8'));
-console.log(JSON.stringify({bytes: contextPayloadBytes(request.payload),
-  budget: checkContextBudget(request.payload, request.limit, request.model_max)}));
-'''.replace("GUARD", json.dumps(GUARD.as_uri())), encoding="utf-8")
-    result = subprocess.run([node, "--experimental-strip-types", str(script)], check=True,
-        input=json.dumps({"payload": payload, "limit": limit, "model_max": model_max},
-                         ensure_ascii=False), capture_output=True, text=True, timeout=10)
-    return json.loads(result.stdout)
-
-
-def test_guard_counts_utf8_and_tool_arguments_in_provider_payload(tmp_path):
+def test_provider_hook_does_not_estimate_serialized_bytes_or_mutate_output_budget(tmp_path):
     text = "\u7814\u7a76\U0001f9ea"
     small = {"messages": [{"role": "user", "content": [{"type": "text", "text": text}]}]}
     large = deepcopy(small)
     large["messages"].append({"role": "assistant", "content": [{"type": "toolCall",
         "id": "tool-a", "name": "rsi_message", "arguments": {"text": text * 5000}}]})
-    for payload, allowed in ((small, True), (large, False)):
-        result = node_budget(tmp_path, payload, 32_768)
-        expected = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-        assert result["bytes"] == result["budget"]["json_bytes"] == expected
-        assert expected > len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-        assert result["budget"]["allowed"] is allowed
-        assert result["budget"]["limit_tokens"] == 32_768
-        assert result["budget"]["reserve_tokens"] > 0
+    for payload in (small, large):
+        result, receipt = run_guard(tmp_path / ("small" if payload is small else "large"), '''
+const body = {input:request.messages, max_output_tokens:48000};
+const before = JSON.stringify(body);
+const returned = hooks.before_provider_request({payload:body},
+  {model:{contextWindow:64000,maxTokens:32768,api:'openai-responses'}});
+console.log(JSON.stringify({body,before,returned}));
+''', limit=64_000, payload=payload)
+        assert result.returncode == 0, result.stderr
+        response = json.loads(result.stdout)
+        assert response["body"] == {"input": payload["messages"], "max_output_tokens": 48000}
+        assert response.get("returned") is None
+        assert "json_bytes" not in json.loads(receipt.read_text())
 
 
 @pytest.mark.parametrize("role", ["curator", "researcher"])
 @pytest.mark.parametrize("large_arguments", [False, True])
-def test_dynamic_context_keeps_constraints_recent_pairs_and_full_history(tmp_path, role, large_arguments):
+def test_pi_native_provider_preserves_large_history_and_role_constraints(tmp_path, role, large_arguments):
+    source_file = tmp_path / "evidence/context/full.json"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("{\"recorded\":true}", encoding="utf-8")
     messages = [
         {"role": "system", "content": "Fixed tools and system constraints"},
         {"role": "user", "content": [{"type": "text", "text": f"{role}: preserve Mission and source constraints"}]},
@@ -354,90 +343,87 @@ def test_dynamic_context_keeps_constraints_recent_pairs_and_full_history(tmp_pat
          "content": [{"type": "text", "text": "The current recorded result"}]}])
     result, receipt = run_guard(tmp_path, '''
 const model = {contextWindow:256000, maxTokens:128000, api:'openai-responses'};
-const compact = hooks.context_with_system({messages:request.messages}, {model});
-const marker = compact.messages.find(message => message.role === 'user' &&
-  message.content?.[0]?.text?.includes('context_history_ref'));
-const source = JSON.parse(marker.content[0].text).context_history_ref;
-const sourceText = fs.readFileSync(source.path, 'utf8');
-const readResult = await hooks.tool_call({toolName:'read',input:{path:source.path}});
-const editResult = await hooks.tool_call({toolName:'edit',input:{path:source.path}});
-const body = hooks.before_provider_request({payload:{model:'gpt-6.1-sol',input:compact.messages}}, {model});
-console.log(JSON.stringify({messages:compact.messages, source, archived:JSON.parse(sourceText),
+const payload = {model:'gpt-6.1-sol',input:request.messages};
+const before = JSON.stringify(payload);
+const body = hooks.before_provider_request({payload}, {model});
+const readResult = await hooks.tool_call({toolName:'read',input:{path:'evidence/context/full.json'}});
+const editResult = await hooks.tool_call({toolName:'edit',input:{path:'evidence/context/full.json'}});
+console.log(JSON.stringify({messages:request.messages, before, body,
   read_allowed:readResult === undefined, edit_blocked:editResult?.block === true,
-  source_bytes:Buffer.byteLength(sourceText,'utf8'), body}));
+  payload}));
 ''', limit=256000, payload={"messages": messages})
     assert result.returncode == 0, result.stderr
     response = json.loads(result.stdout)
-    compact = response["messages"]
-    assert compact[:2] == messages[:2]
-    assert compact[-2:] == messages[-2:]
-    assert response["archived"]["messages"] == messages
+    assert response["messages"] == messages
+    assert response["payload"] == {"model": "gpt-6.1-sol", "input": messages}
+    assert response["before"] == json.dumps(response["payload"], ensure_ascii=False, separators=(",", ":"))
+    assert response.get("body") is None
     assert response["read_allowed"] is True
     assert response["edit_blocked"] is True
-    assert hashlib.sha256(Path(response["source"]["path"]).read_bytes()).hexdigest() == response["source"]["sha256"]
-    assert response["body"]["max_output_tokens"] == 128000
-    for message in compact:
-        if message["role"] == "assistant":
-            for call in message["content"]:
-                if call["type"] == "toolCall":
-                    assert any(item["role"] == "toolResult" and item["toolCallId"] == call["id"] for item in compact)
     checks = [json.loads(line) for line in receipt.read_text().splitlines()]
-    view = next(check for check in checks if check["stage"] == "context_view")
-    provider = checks[-1]
-    assert view["after_bytes"] < view["before_bytes"]
-    assert view["after_bytes"] + 128000 + 16384 <= 256000
-    assert provider["allowed"] is True
-    assert provider["reserve_tokens"] == provider["effective_max_output_tokens"] == 128000
-    assert provider["json_bytes"] + 128000 <= 256000
+    assert checks == [{
+        "stage": "provider_request", "management": "pi-native",
+        "limit_tokens": 256000, "model_context_window": 256000,
+        "model_max_tokens": 128000, "model_configuration_valid": True,
+        "checked_at": checks[0]["checked_at"]}]
 
 
 def test_dynamic_context_does_not_change_small_conversation(tmp_path):
     messages = [{"role": "system", "content": "system"},
                 {"role": "user", "content": [{"type": "text", "text": "current constraints"}]}]
     result, _receipt = run_guard(tmp_path, '''
-const compact = hooks.context_with_system({messages:request.messages},
+const payload = {input:request.messages, max_output_tokens:32000};
+const before = JSON.stringify(payload);
+const returned = hooks.before_provider_request({payload},
   {model:{contextWindow:256000,maxTokens:128000}});
-console.log(JSON.stringify(compact));
+console.log(JSON.stringify({payload,before,returned}));
 ''', limit=256000, payload={"messages": messages})
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["messages"] == messages
+    response = json.loads(result.stdout)
+    assert response["payload"] == {"input": messages, "max_output_tokens": 32000}
+    assert response["before"] == json.dumps(response["payload"], separators=(",", ":"))
+    assert response.get("returned") is None
 
 
 @pytest.mark.parametrize("large_content", [False, True])
-def test_recent_tool_results_archive_duplicate_details_without_breaking_pairs(tmp_path, large_content):
+def test_tool_result_archives_duplicate_details_without_changing_pi_payload(tmp_path, large_content):
     messages = [{"role": "system", "content": "System constraints " * 1200},
         {"role": "user", "content": [{"type": "text", "text": "Current task constraints " * 900}]},
         {"role": "assistant", "content": [{"type": "toolCall", "id": "read-a", "name": "read",
             "arguments": {"path": "evidence/a.json"}}, {"type": "toolCall", "id": "read-b", "name": "read",
             "arguments": {"path": "evidence/b.json"}}]}]
     for call in ("read-a", "read-b"):
-        messages.append({"role": "toolResult", "toolCallId": call, "toolName": "read", "isError": False,
+        messages.append({"role": "toolResult", "toolCallId": call, "toolName": "web_search", "isError": False,
             "content": [{"type": "text", "text": "current result " * (4000 if large_content else 150)}],
             "details": {"truncated_content": "original duplicate body " * 2500}})
     result, _receipt = run_guard(tmp_path, '''
-const compact = hooks.context_with_system({messages:request.messages},
+const projections = request.messages.slice(-2).map(message => hooks.tool_result(message));
+const payload = {input:request.messages};
+const before = JSON.stringify(payload);
+const body = hooks.before_provider_request({payload},
   {model:{contextWindow:256000,maxTokens:128000,api:'openai-responses'}});
-const body = hooks.before_provider_request({payload:{input:compact.messages}},
-  {model:{contextWindow:256000,maxTokens:128000,api:'openai-responses'}});
-console.log(JSON.stringify({messages:compact.messages,body}));
+console.log(JSON.stringify({messages:request.messages,projections,payload,before,body}));
 ''', limit=256000, payload={"messages": messages})
     assert result.returncode == 0, result.stderr
-    compact = json.loads(result.stdout)["messages"]
-    assert compact[:2] == messages[:2]
-    assert next(message for message in compact if message["role"] == "assistant") == messages[2]
-    for index, message in enumerate(compact[-2:]):
+    response = json.loads(result.stdout)
+    assert response["messages"] == messages
+    assert response["payload"] == {"input": messages}
+    assert response["before"] == json.dumps(response["payload"], separators=(",", ":"))
+    assert response.get("body") is None
+    for index, projection in enumerate(response["projections"]):
         original = messages[index + 3]
-        assert (message["toolCallId"], message["toolName"], message["isError"]) == (
-            original["toolCallId"], original["toolName"], False)
-        assert source_record(message["details"]["source_ref"]) == original["details"]
+        assert projection["details"]["source_ref"]
+        assert source_record(projection["details"]["source_ref"]) == original["details"]
         if large_content:
-            assert source_record(json.loads(message["content"][0]["text"])["source_ref"]) == original
+            archived = source_record(json.loads(projection["content"][0]["text"])["source_ref"])
+            assert archived["content"] == original["content"]
+            assert archived["details"] == original["details"]
         else:
-            assert message["content"] == original["content"]
+            assert projection["content"] == original["content"]
 
 
-def test_tool_result_archives_large_details_even_when_content_is_short(tmp_path):
-    event = {"toolName": "read", "toolCallId": "read-a", "content": [{"type": "text", "text": "short excerpt"}],
+def test_custom_tool_result_archives_large_details_even_when_content_is_short(tmp_path):
+    event = {"toolName": "web_search", "toolCallId": "search-a", "content": [{"type": "text", "text": "short excerpt"}],
              "details": {"truncation": {"raw": "whole read body " * 10000}}}
     result, _receipt = run_guard(tmp_path, '''
 const result = hooks.tool_result(request);
@@ -452,29 +438,47 @@ console.log(JSON.stringify(result));
 
 def test_responses_provider_keeps_explicit_output_budget(tmp_path):
     result, receipt = run_guard(tmp_path, '''
-const body = hooks.before_provider_request({payload:{input:[],max_output_tokens:48000}},
+const payload = {input:[],max_output_tokens:48000};
+const body = hooks.before_provider_request({payload},
   {model:{contextWindow:256000,maxTokens:128000,api:'openai-responses'}});
-console.log(JSON.stringify(body));
+console.log(JSON.stringify({payload,body}));
 ''', limit=256000)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["max_output_tokens"] == 48000
+    response = json.loads(result.stdout)
+    assert response["payload"] == {"input": [], "max_output_tokens": 48000}
+    assert response.get("body") is None
     check = json.loads(receipt.read_text().splitlines()[-1])
-    assert check["reserve_tokens"] == 48000
-    assert check["effective_max_output_tokens"] == 48000
+    assert check["management"] == "pi-native"
+    assert "json_bytes" not in check and "effective_max_output_tokens" not in check
 
 
-@pytest.mark.parametrize("input_bytes,allowed", [(20_000, True), (40_000, False)])
-def test_guard_reserves_model_output_tokens(tmp_path, input_bytes, allowed):
-    payload = {"messages": [{"role": "user", "content": "x" * input_bytes}]}
-    result = node_budget(tmp_path, payload, 64_000, model_max=32_768)
-    assert result["budget"]["limit_tokens"] == 64_000
-    assert result["budget"]["reserve_tokens"] == 32_768
-    assert result["budget"]["allowed"] is allowed
+def test_provider_hook_requires_model_context_within_cap(tmp_path):
+    result, receipt = run_guard(tmp_path, '''
+const payload = {input:[], max_output_tokens:32000};
+const body = hooks.before_provider_request({payload},
+  {model:{contextWindow:64000,maxTokens:32000,api:'openai-responses'}});
+console.log(JSON.stringify({payload,body}));
+''', limit=64_000)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout).get("body") is None
+    check = json.loads(receipt.read_text())
+    assert check["model_context_window"] == 64_000
+    assert check["limit_tokens"] == 64_000
+
+    result, _ = run_guard(tmp_path / "too-large", '''
+hooks.before_provider_request({payload:{input:[]}},
+  {model:{contextWindow:64001,maxTokens:32000,api:'openai-responses'}});
+console.log('provider request continued');
+''', limit=64_000)
+    assert result.returncode == 78
+    assert "contextWindow=64001" in result.stderr
+    assert "configured cap 64000" in result.stderr
+    assert "provider request continued" not in result.stdout
 
 
 def run_guard(tmp_path, script, *, limit=32_768, payload=None, blocked_receipt=False, env_overrides=None):
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace.mkdir(parents=True)
     receipt = workspace / "context-budget.jsonl"
     if blocked_receipt:
         receipt.mkdir()
@@ -497,22 +501,21 @@ const request = JSON.parse(fs.readFileSync(0, 'utf8'));
     return result, receipt
 
 
-def test_provider_hook_exits_before_an_over_budget_request_can_continue(tmp_path):
+def test_provider_hook_allows_large_payload_and_leaves_native_budget_to_pi(tmp_path):
     payload = {"messages": [{"role": "user", "content": "x" * 20_000}]}
     result, receipt = run_guard(tmp_path, '''await hooks.before_provider_request(
     {payload: request}, {model: {maxTokens: 16384, contextWindow: 32768}});
 console.log('provider request continued');
 ''', payload=payload)
-    assert result.returncode == 78
-    assert "provider request continued" not in result.stdout
-    assert "context budget exceeded" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert "provider request continued" in result.stdout
     check = json.loads(receipt.read_text())
-    assert check["allowed"] is False
+    assert check["management"] == "pi-native"
     assert check["limit_tokens"] == 32_768
-    assert check["reserve_tokens"] == 16_384
+    assert check["model_context_window"] == 32_768
 
 
-def test_provider_hook_uses_model_context_window_and_records_allowed_requests(tmp_path):
+def test_provider_hook_records_model_context_window_for_allowed_requests(tmp_path):
     result, receipt = run_guard(tmp_path, '''await hooks.before_provider_request(
     {payload: request}, {model: {maxTokens: 16384, contextWindow: 32768}});
 console.log('provider request continued');
@@ -520,18 +523,19 @@ console.log('provider request continued');
     assert result.returncode == 0, result.stderr
     assert "provider request continued" in result.stdout
     check = json.loads(receipt.read_text())
-    assert check["allowed"] is True
-    assert check["limit_tokens"] == 32_768
+    assert check["management"] == "pi-native"
+    assert check["model_context_window"] == 32_768
+    assert check["limit_tokens"] == 64_000
 
 
 def test_provider_hook_exits_when_budget_evidence_cannot_be_written(tmp_path):
     result, _ = run_guard(tmp_path, '''await hooks.before_provider_request(
-    {payload: request}, {model: {maxTokens: 16384}});
+    {payload: request}, {model: {contextWindow:32768,maxTokens:16384}});
 console.log('provider request continued');
 ''', payload={"messages": []}, blocked_receipt=True)
     assert result.returncode == 78
     assert "provider request continued" not in result.stdout
-    assert "could not be checked or recorded" in result.stderr
+    assert "could not record Pi-native context evidence" in result.stderr
 
 
 def test_large_tool_results_keep_attribution_and_hash_verified_read_only_source(tmp_path):
@@ -569,7 +573,9 @@ sys.stdin.read()
 if RECORD_BUDGET and os.environ.get("RSI_CONTEXT_BUDGET_RECEIPT"):
     pathlib.Path(os.environ["RSI_CONTEXT_BUDGET_RECEIPT"]).write_text(json.dumps({
         "limit_tokens":int(os.environ["RSI_AGENT_CONTEXT_LIMIT_TOKENS"]),
-        "reserve_tokens":16384,"json_bytes":10,"allowed":True,"stage":BUDGET_STAGE}) + "\\n")
+        "model_context_window":int(os.environ["RSI_AGENT_CONTEXT_LIMIT_TOKENS"]),
+        "model_max_tokens":16384,"model_configuration_valid":True,
+        "management":"pi-native","stage":BUDGET_STAGE}) + "\\n")
 payload={"summary":"completed", "limit":os.environ.get("RSI_AGENT_CONTEXT_LIMIT_TOKENS")}
 print(json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop",
 "content":[{"type":"text","text":json.dumps(payload)}]}}))
@@ -578,12 +584,40 @@ print(json.dumps({"type":"message_end","message":{"role":"assistant","stopReason
     return executable
 
 
-def test_agent_rejects_initial_prompt_above_cap_before_launch(tmp_path):
-    with pytest.raises(ValueError, match="context.*budget|context.*limit"):
-        run_agent(executable="must-not-launch", role="coordinator", prompt="x" * 30_000,
-            cwd=tmp_path, output_dir=tmp_path / "out", timeout_seconds=5,
-            context_limit_tokens=32_768, guard=GUARD)
-    assert not (tmp_path / "out/agent_result.json").exists()
+def large_output_pi(tmp_path):
+    executable = tmp_path / "large-output-pi"
+    executable.write_text(f"#!{sys.executable}\n" + '''
+import json, os, pathlib, sys
+sys.stdin.read()
+if os.environ.get("RSI_CONTEXT_BUDGET_RECEIPT"):
+    pathlib.Path(os.environ["RSI_CONTEXT_BUDGET_RECEIPT"]).write_text(json.dumps({
+        "stage":"provider_request", "management":"pi-native",
+        "limit_tokens":int(os.environ["RSI_AGENT_CONTEXT_LIMIT_TOKENS"]),
+        "model_context_window":int(os.environ["RSI_AGENT_CONTEXT_LIMIT_TOKENS"]),
+        "model_configuration_valid":True}) + "\\n")
+sys.stderr.write("diagnostic\\n" + "x" * 17_000_000)
+sys.stderr.flush()
+print(json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop",
+    "content":[{"type":"text","text":"{\\"summary\\":\\"completed\\"}"}]}}), flush=True)
+''', encoding="utf-8")
+    executable.chmod(0o755)
+    return executable
+
+
+def test_long_pi_event_and_stderr_stream_is_not_killed_at_16mb(tmp_path):
+    options = dict(executable=str(large_output_pi(tmp_path)), role="coordinator", prompt="brief prompt",
+                   cwd=tmp_path, output_dir=tmp_path / "out", timeout_seconds=5, guard=GUARD)
+    result = run_agent(**options, context_limit_tokens=32_768)
+    assert result["payload"] == {"summary": "completed"}
+    assert (tmp_path / "out/stderr.log").stat().st_size > 16_000_000
+
+
+def test_agent_does_not_reject_prompt_by_utf8_bytes_before_pi_launch(tmp_path):
+    result = run_agent(executable=str(fake_pi(tmp_path)), role="coordinator", prompt="x" * 30_000,
+                       cwd=tmp_path, output_dir=tmp_path / "out", timeout_seconds=5,
+                       context_limit_tokens=32_768, guard=GUARD)
+    assert result["payload"]["summary"] == "completed"
+    assert result["context_budget"]["management"] == "pi-native"
 
 
 def test_completed_receipt_and_frozen_prompt_reuse_preserves_previous_budget(tmp_path):
@@ -662,7 +696,7 @@ def test_runtime_passes_configured_cap_and_archives_only_new_prompt(tmp_path, mo
     assert source.read_bytes() == saved_source
 
 
-@pytest.mark.parametrize("limit", [0, True, 16_384, "64000"])
+@pytest.mark.parametrize("limit", [0, True, -1, "64000"])
 def test_context_cap_config_rejects_values_that_cannot_enforce_the_budget(tmp_path, limit):
     root = project(tmp_path)
     path = root / "deployment/rsi/research.json"

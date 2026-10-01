@@ -7,6 +7,7 @@ const READ_CONTENT_BYTES = 16384;
 const PAGE_RESPONSE_BYTES = 20000;
 const PAGE_DEFAULT_BYTES = 8192;
 const PAGE_SOURCE_BYTES = 16 * 1024 * 1024;
+const PI_NATIVE_RESULT_TOOLS = new Set(["read", "bash", "grep", "find", "ls", "edit", "write", "rsi_read_source"]);
 
 function utf8Prefix(text: string, maxBytes: number): string {
   let bytes = 0;
@@ -67,93 +68,6 @@ export function contextPayloadBytes(payload: any): number {
   return Buffer.byteLength(JSON.stringify(payload), "utf8");
 }
 
-export function checkContextBudget(payload: any, limit: number, modelMaxTokens = 0) {
-  const jsonBytes = contextPayloadBytes(payload);
-  const requested = payload?.max_tokens ?? payload?.max_completion_tokens ??
-    payload?.max_output_tokens ?? payload?.generationConfig?.maxOutputTokens ??
-    payload?.generation_config?.max_output_tokens ?? payload?.config?.maxOutputTokens;
-  const reserve = Math.max(16384, typeof requested === "number" && requested > 0 ? requested : modelMaxTokens);
-  return { limit_tokens: limit, reserve_tokens: reserve, json_bytes: jsonBytes,
-    estimated_input_tokens: jsonBytes, allowed: jsonBytes + reserve <= limit,
-    estimation: "UTF-8 JSON bytes as a conservative input-token upper bound" };
-}
-
-export function compactConversation(messages: any[], inputLimit: number, archive: (value: any) => any) {
-  const beforeBytes = contextPayloadBytes(messages);
-  if (beforeBytes <= inputLimit) return { messages, before_bytes: beforeBytes, after_bytes: beforeBytes };
-  const source = archive({ kind: "conversation", messages });
-  const initialUser = messages.findIndex(message => message.role === "user");
-  let recentAssistant = -1;
-  for (let index = messages.length - 1; index >= 0; index--) {
-    if (messages[index].role === "assistant") { recentAssistant = index; break; }
-  }
-  const projected = messages.map((message, index) => {
-    if (message.role !== "toolResult") return message;
-    const text = (message.content || []).filter((part: any) => part.type === "text")
-      .map((part: any) => part.text).join("\n");
-    const ref = { ...source, json_pointer: `/messages/${index}` };
-    const contentBytes = contextPayloadBytes(message.content || []);
-    const preserveContent = contentBytes <= READ_CONTENT_BYTES ||
-      (message.toolName === "rsi_read_source" && contentBytes <= PAGE_RESPONSE_BYTES);
-    let content = preserveContent ? message.content :
-      [{ type: "text", text: JSON.stringify({
-        source_ref: ref, tool_call_id: message.toolCallId, tool_name: message.toolName,
-        read_source: sourceReadHint(source, message.content, `/messages/${index}`),
-        excerpt: utf8Prefix(text, 2048),
-        note: "Verbatim prefix only; use rsi_read_source with read_source parameters for complete source pages." }) }];
-    // Runtime hooks can append inbox text after the bounded source page has been returned.
-    if (message.toolName === "rsi_read_source" && !preserveContent &&
-        message.content?.[0]?.type === "text" && contextPayloadBytes([message.content[0]]) <= PAGE_RESPONSE_BYTES) {
-      let page: any;
-      try { page = JSON.parse(message.content[0].text); } catch { /* Not a source page. */ }
-      if (page?.ok === true && typeof page.text === "string" && typeof page.sha256 === "string" &&
-          Number.isSafeInteger(page.offset) && Number.isSafeInteger(page.next_offset))
-        content = [message.content[0], { type: "text", text: JSON.stringify({
-          appended_content_ref: { ...ref, json_pointer: ref.json_pointer + "/content" },
-          read_source: sourceReadHint(source, message.content, `/messages/${index}`, 1),
-          note: "Additional runtime messages are archived separately; the complete source page above is preserved." }) }];
-    }
-    return { ...message, content, ...(message.details !== undefined ? {
-      details: { source_ref: { ...ref, json_pointer: ref.json_pointer + "/details" } } } : {}) };
-  });
-  const omitted = new Set<number>();
-  const view = () => {
-    const output = projected.filter((_message, index) => !omitted.has(index));
-    const note = { role: "user", timestamp: Date.now(), content: [{ type: "text", text: JSON.stringify({
-      context_history_ref: source, omitted_message_count: omitted.size,
-      note: "Earlier conversation details were moved to a hash-checked source to fit the context budget. " +
-        "The source is an attributed transcript, not verified findings. Read it with rsi_read_source; " +
-        "json_pointer selects a record or its text. Continue with next_offset and the returned sha256. " +
-        "Current task instructions remain in the initial user message." }) }] };
-    const anchor = initialUser < 0 ? output.findIndex(message => message.role !== "system") :
-      output.indexOf(messages[initialUser]) + 1;
-    output.splice(anchor < 0 ? output.length : anchor, 0, note);
-    return output;
-  };
-  for (let index = 0; contextPayloadBytes(view()) > inputLimit && index < recentAssistant; index++) {
-    const message = messages[index];
-    if (message.role !== "assistant") continue;
-    const calls = (message.content || []).filter((part: any) => part.type === "toolCall");
-    const group = [index];
-    const results = new Set<string>();
-    let end = index + 1;
-    while (end < recentAssistant && messages[end].role === "toolResult") {
-      group.push(end);
-      results.add(messages[end].toolCallId);
-      end++;
-    }
-    if (calls.length && (calls.length !== results.size || calls.some((call: any) => !results.has(call.id)))) continue;
-    if (!calls.length && group.length > 1) continue;
-    for (const member of group) omitted.add(member);
-    index = end - 1;
-  }
-  const compacted = view();
-  if (contextPayloadBytes(compacted) > inputLimit)
-    throw new Error("Current instructions and most recent tool-call group exceed the context budget");
-  return { messages: compacted, source_ref: source, before_bytes: beforeBytes,
-    after_bytes: contextPayloadBytes(compacted), omitted_message_count: omitted.size };
-}
-
 // Pi supplies these hooks before built-in tool execution.
 export default function (pi: any) {
   const root = realpathSync(process.env.RSI_AGENT_ROOT || process.cwd());
@@ -201,68 +115,36 @@ export default function (pi: any) {
     return { path, sha256, bytes: Buffer.byteLength(raw, "utf8") };
   }
   if (contextLimit) {
-    pi.on("context_with_system", (event: any, ctx: any) => {
-      try {
-        const limit = ctx.model?.contextWindow > 0 ? Math.min(contextLimit, ctx.model.contextWindow) : contextLimit;
-        const reserve = Math.max(16384, ctx.model?.maxTokens || 0);
-        const compacted = compactConversation(event.messages, limit - reserve - 16384, archiveContextSource);
-        if (compacted.source_ref && process.env.RSI_CONTEXT_BUDGET_RECEIPT)
-          appendFileSync(process.env.RSI_CONTEXT_BUDGET_RECEIPT, JSON.stringify({
-            stage: "context_view", limit_tokens: limit, reserve_tokens: reserve,
-            before_bytes: compacted.before_bytes, after_bytes: compacted.after_bytes,
-            source_ref: compacted.source_ref, omitted_message_count: compacted.omitted_message_count,
-            checked_at: new Date().toISOString() }) + "\n");
-        return { messages: compacted.messages };
-      } catch {
-        process.stderr.write("RSI context view cannot fit current instructions and recent tool results; request blocked.\n");
-        process.exit(78);
-      }
-    });
-    // Pi catches handler exceptions and still sends the request. Exit synchronously to fail closed.
+    // Pi owns token estimation, output fitting, compaction, and overflow recovery.
+    // Only verify the operator's native model configuration; never rewrite history
+    // or infer token overflow from serialized UTF-8 bytes.
     pi.on("before_provider_request", (event: any, ctx: any) => {
-      try {
-      const payload = event.payload;
-      if (ctx.model?.api === "openai-responses" && payload && typeof payload === "object" &&
-          payload.max_output_tokens === undefined && ctx.model.maxTokens > 0)
-        payload.max_output_tokens = ctx.model.maxTokens;
-      const limit = ctx.model?.contextWindow > 0 ? Math.min(contextLimit, ctx.model.contextWindow) : contextLimit;
-      const check = checkContextBudget(payload, limit, ctx.model?.maxTokens || 0);
-      const receipt = process.env.RSI_CONTEXT_BUDGET_RECEIPT;
-      if (receipt) appendFileSync(receipt, JSON.stringify({ ...check, stage: "provider_request",
-        effective_max_output_tokens: payload?.max_output_tokens,
-        checked_at: new Date().toISOString() }) + "\n");
-      if (!check.allowed) {
-        process.stderr.write(`RSI context budget exceeded: ${check.json_bytes} input bytes + ${check.reserve_tokens} output tokens > ${limit}.\n`);
+      const window = ctx.model?.contextWindow;
+      if (!Number.isSafeInteger(window) || window <= 0 || window > contextLimit) {
+        process.stderr.write(`RSI Pi model.contextWindow=${String(window)} must be a positive integer <= configured cap ${contextLimit}; configure the selected model in Pi models.json.\n`);
         process.exit(78);
       }
-      return payload;
-      } catch {
-        process.stderr.write("RSI context budget could not be checked or recorded; request blocked.\n");
-        process.exit(78);
+      if (process.env.RSI_CONTEXT_BUDGET_RECEIPT) {
+        try {
+          appendFileSync(process.env.RSI_CONTEXT_BUDGET_RECEIPT, JSON.stringify({
+            stage: "provider_request", management: "pi-native",
+            limit_tokens: contextLimit, model_context_window: window,
+            model_max_tokens: ctx.model?.maxTokens,
+            model_configuration_valid: true,
+            checked_at: new Date().toISOString() }) + "\n");
+        } catch {
+          process.stderr.write("RSI could not record Pi-native context evidence; provider request blocked.\n");
+          process.exit(78);
+        }
       }
-    });
-    pi.on("session_before_compact", (event: any, ctx: any) => {
-      try {
-      const payload = { messages: event.preparation.messagesToSummarize,
-        turn_prefix: event.preparation.turnPrefixMessages, previous_summary: event.preparation.previousSummary };
-      const limit = ctx.model?.contextWindow > 0 ? Math.min(contextLimit, ctx.model.contextWindow) : contextLimit;
-      const check = checkContextBudget(payload, limit, event.preparation.settings.reserveTokens);
-      const receipt = process.env.RSI_CONTEXT_BUDGET_RECEIPT;
-      if (receipt) appendFileSync(receipt, JSON.stringify({ ...check,
-        allowed: check.json_bytes + check.reserve_tokens + 16384 <= limit,
-        prompt_overhead_reserve_tokens: 16384, stage: "compaction", checked_at: new Date().toISOString() }) + "\n");
-      if (check.json_bytes + check.reserve_tokens + 16384 > limit) {
-        process.stderr.write("RSI compaction context budget exceeded before its summarization request.\n");
-        process.exit(78);
-      }
-      } catch {
-        process.stderr.write("RSI compaction budget could not be checked or recorded; request blocked.\n");
-        process.exit(78);
-      }
+      // No payload return or mutation: the SDK retains its own output budget.
     });
     pi.on("tool_result", (event: any) => {
-      if (event.toolName === "rsi_read_source" &&
-          contextPayloadBytes({ content: event.content || [], details: event.details }) <= PAGE_RESPONSE_BYTES) return;
+      // Pi's built-in file/shell tools already paginate or truncate their
+      // results. rsi_read_source also returns a bounded, hash-pinned page.
+      // Preserve those exact payloads so RSI does not add a second prefix or
+      // hide runtime-appended page content from Pi's native compaction.
+      if (PI_NATIVE_RESULT_TOOLS.has(event.toolName)) return;
       if (!workspace || contextPayloadBytes({ content: event.content || [], details: event.details }) <= 6000) return;
       const source = archiveContextSource({ tool_name: event.toolName, tool_call_id: event.toolCallId,
         content: event.content, details: event.details });

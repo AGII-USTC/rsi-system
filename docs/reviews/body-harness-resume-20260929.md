@@ -236,3 +236,31 @@ Mission 仍 active，当前主编排 `task-93665f3ed38a167c8117` 正在评审，
 已核验 `agent.env` 使用的共享代理 `127.0.0.1:7897`：本地 TCP 可以连接，但对 AIHub 和独立 HTTPS 站点均在 TLS 阶段超时；直接访问 AIHub 也超时。该共享代理由 renlab 账户运行，其配置对 kang 不可读，未擅自重启或修改。另对 kang 自己已有的 mihomo 服务做了可逆检查：确认 17890 端口已开始监听后，两个 HTTPS 目标仍返回 TLS EOF；随后恢复为原来的 inactive/disabled，未修改节点、凭证或 `agent.env`。证据位于上述备份目录的 `proxy-recovery.json`。
 
 为避免继续重复调用，原 Mission 在 version `914` 暂停，核验无 queued/running 任务；剩余 **45 个模型任务、12 次实验**。每小时跟进 `rsi-2` 也已暂停。需要先恢复 kangrenlab 可用的代理出口，再在同一 Mission 上按既有恢复规则继续；当前模型交换和源码修复均已保留，未产生新的正式 Run、有效研究响应或科学收益。
+
+## 2026-10-01：恢复共享代理，删除重复上下文管理
+
+### 网络修复与真实请求
+
+用户授权经 `renlab` 修复共享 `7897` 代理后，已查到 Mihomo 的三个外部 UDP DNS 都无法解析当前代理节点；系统解析器能解析相同域名。修复把当前配置和持久 merge 中的 `default-nameserver`、`proxy-server-nameserver`、`nameserver` 改为 `system`，配置测试通过后热加载成功。没有更换节点、端口或模型凭证，也没有启动 Qwen。私有备份和 HTTPS 验证在 `/home/renlab/.local/state/rsi-proxy-repairs/20261001T141951Z/`。
+
+分别从 renlab 与 kang 验证 TLS 恢复：AIHub 未鉴权 models 请求返回 401、Gemini messages 的 GET 返回 404，curl 均正常完成。这只验证网络可达；随后真实 Astra 回复与工具记录才证明模型执行恢复。没有再使用临时本机隧道，已有 kang 备用代理恢复为原先的 inactive/disabled。
+
+版本 `915` 按已授权规则补足剩余 48 个模型任务/12 次实验，上限变为 171/21；历史 123 个模型任务与 9 次 Runner 消耗保留。`916` 记录网络修复，`917` 恢复同一个 Mission。备份在 `.rsi/deployment/backups/shared-7897-dns-recovery-20261001T142230Z/`，激活记录为 `.rsi/deployment/shared-7897-dns-recovery-activation.json`。
+
+### 真正导致后续中断的重复限制
+
+接续的 `task-fe4f819c140d7e509849` 已有 1 个成功 assistant 回合，执行了 `rsi_inbox` 和 6 次 `read`；`task-eae82627fc05de7aba3b` 有 9 个成功 assistant 回合，执行 `read`、`rsi_status`、`rsi_read_source`、`rsi_research`、`rsi_inbox`。随后都被 RSI 的旧 `context_with_system` 字节估算强退：`RSI context view cannot fit current instructions and recent tool results; request blocked.` 这不是网络失败，也不是实际 token 超出 256k 的证据。
+
+两份原始会话证据分别为各任务 `workspace/.context-sources/` 中的 `876cdb70c2861665ee6558d459028b3278b656e1467f24ad813af8b85d694632.json` 与 `22f1546660b76c4f4e586db87234d4d6b055e1d21c9a3d252608b062ffdd9819.json`，文件名就是其 SHA-256。离线回放能复现旧实现拒绝，删除自定义剪裁后请求不再被 RSI 改写；回放没有调用模型，原始文件哈希未变。
+
+后续 `task-f1267d197602fa74a9c7` 在旧进程中继续运行。到 14:50 UTC 已有 161 个 assistant 回合，但主要是重复读取，不能当成研究推进或正式 Run。抽样显示同一条交接读了 22 次、证据目录读了 20 次。版本 `928` 发送维护交接，说明观测到的重复读取与上下文修复，要求先保存已核实内容和未完成事项，再按正常协议自主提交本轮决策；没有指定算法或要求结束 Mission。该交接随后出现在真实事件流中，但出现不等于已理解或完成交接。
+
+用户随后明确要求把上下文管理交给 Pi 原生机制；本轮按指定的 GPT-6.1-Sol/xhigh 子 agent 实现，由主 agent 审查。接口和职责边界见 [Pi 原生上下文管理](../design/pi-native-context-management.md)。上述是原始故障与修复过程记录，最终测试、部署与接续状态见下续记。
+
+### 原生管理修复与本地验收
+
+已删除 RSI 按字节拦截初始提示、删改会话、阻断原生压缩和强塞输出上限的逻辑；模型窗口仍配置为 256000。原生工具和 `rsi_read_source` 的结果不再被二次截成前缀，自定义非分页大结果仍有来源归档。删除累计日志 16 MB 强退，日志解析、哈希及 Curator 提交恢复改为流式处理。预算、并发、不限总时、角色权限、只读权重与原始证据约束保留。
+
+主 agent 独立回归分两批执行：其他测试 543 passed、15 skipped，变更的上下文/分页测试 63 passed，合计 **606 passed、15 skipped**。跳过项是本地 Linux bubblewrap 或旧 Pi 扩展测试环境条件，未计为通过。真实安装的 Pi 0.87.1 在隔离内存会话中完成原生 threshold 压缩并继续第三轮；使用假供应商，无外部请求。原始失败回放的两份源文件哈希也保持不变。
+
+旧任务 `task-f1267d197602fa74a9c7` 最终写出 `workspace/handoff.md`，随后因 `upstream_http2_stream_error` 自然失败；并非部署强杀。交接在版本 `929` 发布，版本 `931` 因恢复次数耗尽自动暂停，无本 Mission queued/running。这个最终传输错误与前两次本地 guard 拒绝分开记录；不能把本轮故障全部归因于上下文，也不能把维护交接当成科研成果。
