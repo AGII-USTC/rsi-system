@@ -264,3 +264,17 @@ Mission 仍 active，当前主编排 `task-93665f3ed38a167c8117` 正在评审，
 主 agent 独立回归分两批执行：其他测试 543 passed、15 skipped，变更的上下文/分页测试 63 passed，合计 **606 passed、15 skipped**。跳过项是本地 Linux bubblewrap 或旧 Pi 扩展测试环境条件，未计为通过。真实安装的 Pi 0.87.1 在隔离内存会话中完成原生 threshold 压缩并继续第三轮；使用假供应商，无外部请求。原始失败回放的两份源文件哈希也保持不变。
 
 旧任务 `task-f1267d197602fa74a9c7` 最终写出 `workspace/handoff.md`，随后因 `upstream_http2_stream_error` 自然失败；并非部署强杀。交接在版本 `929` 发布，版本 `931` 因恢复次数耗尽自动暂停，无本 Mission queued/running。这个最终传输错误与前两次本地 guard 拒绝分开记录；不能把本轮故障全部归因于上下文，也不能把维护交接当成科研成果。
+
+### 生产部署、证据保留与真实接续
+
+核心提交 `116bfb7` 与部署说明 `e86ecec` 已推送 `origin/main`。2026-10-01 15:30 UTC，在原 Mission 为 paused/version931、无本 Mission queued/running、无其他 active Mission 的边界停止用户级定时工作进程，逐文件核对旧 SHA-256 后，更新实际生产入口 `experiments/rsi_control_plane/pi_agent.py`、`config.py`、`deployment/rsi/pi-guard.ts` 及对应测试。没有用新包覆盖远端研究文件或私有配置，也没有干预 zhaohuijin。备份位于 `.rsi/deployment/backups/pi-native-20261001T153024Z/`，激活清单为 `.rsi/deployment/pi-native-activation.json`。
+
+生产服务实际 Python 是 `/home/kang/embodied-memory-stage2/.venv/bin/python`，Pi 启动器使用独立安装的 Node 22.23.3。首次验收误用了仓库内不存在的 `.venv/bin/python`，日志保留；改用服务 Python 后因 SSH 默认 Node 12 跳过扩展测试，再显式指定生产 Node 22 重测，最终为 **62 passed、1 skipped**。剩余一项要求本地 npm SDK 布局，而服务器使用 Pi bundle；该 SDK schema 测试已在本地通过，未把服务器跳过项计为通过。生产日志：`.rsi/deployment/acceptance/pi-native-20261001T153024Z/production-focused-node22.log`。
+
+配置核验确认 Pi 模型窗口仍为 256000，Pi 原生 compaction 使用默认值，Agent 与 Runner 总时限均为 null，并发仍是 3 协作者和 1 Runner。Coordinator 仍为 `aihub（research）/gpt-6-astra/high`，独立问题重述仍为 `sub2api-reframe/gemini-3.8-flash-high/high`，其余既有路由与可选搜索兼容项未改。这里的 256000 是 Pi 模型窗口配置，不再是 RSI 的 JSON 字节拦截阈值。
+
+确认属于执行故障并核对安全边界后，version `932` 按已有授权把剩余预算补足 48 模型任务/12 实验；保留历史 126 个模型任务与 9 个 Runner 任务，对应累计上限 174/21。version `933` 提供维护说明与上轮 `workspace/handoff.md` 地址，version `934` 从断点恢复同一 Mission。恢复前数据库另存 `state-before-resume.sqlite3`；三份历史失败任务的输入、事件、错误日志和现存交接文件哈希已核对未变。
+
+截至 **2026-10-01 23:46 北京时间（15:46 UTC）**，Mission 为 **active/version936**，新 Coordinator `task-a83009f5da3e6009ab7b` 正在运行。真实调用账本与事件流确认 Astra/high、无总时限；已完成 **12 个成功 assistant 回合、12 次工具操作**：8 次 `read`，以及 `rsi_research`、`rsi_inbox`、`rsi_read_source`、`grep` 各 1 次，未见模型错误。剩余 **47 模型任务/12 实验**。证据是新任务 `events.jsonl`、数据库 `runtime_agent_calls` 和部署验收目录的 `live-verified.json`。较早的 `live-first-check.json` 因脱敏表达式误匹配 `task-` 后缀而隐藏了任务 ID，以保留确切 ID 的后续 `live-verified.json` 为准，原任务证据没有改写。
+
+这证明新代码下实际模型执行和按需工具读取已恢复；此时尚未观察到真实会话的原生 compaction 事件，也没有本次维护后新建的正式 pi0.5/LIBERO Run、Researcher 报告或科学收益。原生压缩能力的证据仍是安装 SDK 的离线假供应商验收，不能混称线上压缩已触发。每小时跟进 `rsi-2` 已恢复 ACTIVE，明确不重新添加重复上下文管理；无实质变化保持安静，发生可恢复故障才修复并续接。
