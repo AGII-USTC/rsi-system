@@ -22,6 +22,8 @@ RSI 以用户提供的 Mission 为目标，记录任务委派、协作消息、�
 
 Pi 供应商保存在 `~/.pi/agent/models.json`。API Key 单独放在私有目录，文件权限为 0600，通过引用读取。不要把实际地址、密钥或账户信息写进仓库。可通过 独立包中的本地工作台 配置供应商及角色路由。
 
+`agent_context_limit_tokens` 是 Pi 原生 `model.contextWindow` 的上限校验；上下文 token 估算、输出裁剪、自动 compaction 和溢出恢复由 Pi 管理。配置边界、`--no-session` 下的内存 compaction 验收以及当前 Sub2API 路由与其他 Agent API 的区别见 [Pi 原生上下文管理设计](../../docs/design/pi-native-context-management.md)。
+
 ## Mission
 
 复制 [mission.example.json](mission.example.json)，修改任务 ID、目标、背景与完成条件，再登记任务。它是普通资料研究示例，未启用正式实验：
