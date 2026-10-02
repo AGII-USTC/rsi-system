@@ -78,3 +78,11 @@ Mission version 1305 授权 `pi05-self-managed` GPU 环境；既有环境保留�
 第二轮快照为 `self-managed-v2-20261002T090947Z/`。
 这些工程调用不计作 Mission 的科学收益。用户追加授权在恢复时把剩余预算补足
 48 个模型任务、12 次实验；历史消耗与失败不删除、不退款。
+
+恢复后的运行修复：旧归档器把同一任务的 `handoff.md` 与
+`handoff.md.txt` 映射到同一目标，已改为在冲突时保留两个稳定路径；原冲突字节
+备份在服务器 `.rsi/deployment/backups/archive-conflict-20261002/`。Coordinator 的
+repair 响应曾因带有只读 `reviewed_failures` 字段被二次拒绝，已允许该字段在
+`decision=wait` 修复中被忽略。修复后 Coordinator 已真实运行并创建
+`closed-loop-body-response-identification` 研究节点；当前剩余账本为 46 个模型任务、
+12 次实验。Curator 曾出现一次连接错误，保留失败回执并未当作科学结果。
