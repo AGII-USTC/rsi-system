@@ -28,6 +28,63 @@ Researcher 发布 Python 文件后，在原有 Runner 派单的 `experiment` 内
 
 服务器应分别配置 `libero-sim`（只需模拟器）和 `pi05-libero`（需要真实模型）。研究员根据自己的问题选择。GPU 被其他任务占满时，应先协调资源；不要反复派研究任务来探测同一个环境故障。
 
+## 官方权重与 Memory 绑定
+
+`deployment/rsi/pi05_bindings.py` 为已有安装生成内容清单。它流式读取并哈希
+checkpoint 的全部 `params`、`assets`（含 norm stats），OpenPI Python 源码、
+Memory loader，以及指定 adapter、训练报告和真实请求。只读取权重，不复制。
+清单保存根目录内的相对路径，因此同一身份可以在宿主机与容器内核验。
+该身份固定当前本地文件，不证明这些文件与上游官方发布逐字节相同。
+
+```bash
+python deployment/rsi/pi05_bindings.py build \
+  --manifest /srv/rsi/bindings/reader-v1.json \
+  --checkpoint-root /srv/pi05/cache/openpi-assets/checkpoints/pi05_libero \
+  --openpi-root /srv/pi05/openpi \
+  --memory-root /srv/pi05/research/experiments/pi05_memory \
+  --artifacts-root /srv/pi05/eval \
+  --adapter /srv/pi05/eval/reader/adapter.npz \
+  --report /srv/pi05/eval/reader/report.json \
+  --request /srv/pi05/eval/collection/chunks/request.npz
+```
+
+生成位置必须在数据根目录外；同名清单不会被覆盖。验证时使用 `verify` 操作，
+保留 `--manifest` 和四个 root 参数，换成实际容器路径即可。
+
+管理员在需要这条路线的 Runner profile 中增加只读映射：
+
+| 宿主文件或目录 | 容器位置 |
+| --- | --- |
+| `deployment/rsi/pi05_bindings.py` | `/pi05_bindings.py` |
+| `deployment/rsi/pi05_policy_service.py` | `/rsi-policy-service.py` |
+| 当前内容清单 | `/rsi-bindings.json` |
+| Memory 源码目录 | `/rsi-memory` |
+| 选定产物所在 eval 目录 | `/rsi-artifacts` |
+
+原 `/app` 和 `/openpi-cache` 映射保留。策略启动命令可追加：
+
+```text
+--binding-manifest /rsi-bindings.json --openpi-root /app
+--memory-root /rsi-memory --artifact-root /rsi-artifacts --mode memory
+```
+
+`--mode official` 加载官方无 reader 路线；`memory` 按绑定训练报告加载已保存
+reader；`zero-gate` 加载同一 reader 后只把其 alpha 置零。训练位置目前支持
+output 和 velocity。请求仍使用现有 WebSocket/固定噪声格式，没有新增隐式
+模型选择字段。握手元数据 `rsi_binding` 包含清单身份、模式、实际加载模块
+路径及内容哈希，供 Runner 写入回执。源码不符时应明确做当前源码重新验收，
+不能声称复现旧源码。
+
+需要同一进程内比较多个模式的探针可导入挂载的服务模块并调用
+`load_bound_policy(manifest_path, roots, mode=...)`，返回 `(wrapper, metadata)`。
+管理员提供没有常驻 `policy` 的 profile，可避免探针加载权重时又启动一份
+无关策略。输出仍是经过 Policy 输出变换的物理动作；没有采集内部 chunk 时
+不能声称已测得内部 32 维 chunk。
+
+单元测试验证内容篡改、挂载重映射、实际导入路径和模式校验。
+部署验收还必须实际加载绑定权重与 reader、发送固定噪声请求，并将返回动作
+送入 LIBERO。单元测试或元数据握手不能替代这一步。
+
 ## 保护、恢复与证据
 
 - 容器使用非 root 身份、只读根目录及数据挂载，只开放本 Run 的输出目录和临时目录；不提供 Docker socket、主机网络或模型凭证。
