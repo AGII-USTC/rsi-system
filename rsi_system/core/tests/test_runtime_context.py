@@ -678,6 +678,8 @@ def test_runtime_passes_configured_cap_and_archives_only_new_prompt(tmp_path, mo
     monkeypatch.setattr(RuntimeCoordinator, "_handle_coordinator", crash)
     with pytest.raises(KeyboardInterrupt):
         runtime.tick(agent_runner=lambda **kwargs: (calls.append(kwargs) or decision(action="wait")))
+    assert calls[0]["session_id"].startswith("agent-session-")
+    assert calls[0]["session_dir"] == runtime.runtime_root / "pi-sessions"
     monkeypatch.setattr(RuntimeCoordinator, "_handle_coordinator", original)
     assert calls[0]["context_limit_tokens"] == 64_000
     frozen = runtime.runtime_root / "tasks" / task["task_id"] / "input.json"

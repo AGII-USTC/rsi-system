@@ -100,6 +100,27 @@ def test_decision_repair_never_adds_tools(tmp_path, disabled, want_tools):
     assert str(tmp_path / "pi-web.ts") not in result["payload"]["argv"]
 
 
+def test_native_session_arguments_replace_no_session_and_create_store(tmp_path):
+    session_dir = tmp_path / "pi-sessions"
+    result = run_agent(executable=str(fake_pi(tmp_path)), role="coordinator", prompt="{}",
+                       cwd=tmp_path, output_dir=tmp_path / "out", timeout_seconds=5,
+                       session_id="agent-session-test", session_dir=session_dir)
+    argv = result["payload"]["argv"]
+    assert "--no-session" not in argv
+    assert argv[argv.index("--session-id") + 1] == "agent-session-test"
+    assert argv[argv.index("--session-dir") + 1] == str(session_dir.resolve())
+    assert session_dir.is_dir()
+
+
+def test_native_session_requires_id_and_directory_together(tmp_path):
+    options = dict(executable=str(fake_pi(tmp_path)), role="coordinator", prompt="{}",
+                   cwd=tmp_path, output_dir=tmp_path / "out", timeout_seconds=5)
+    with pytest.raises(ValueError, match="both session_id and session_dir"):
+        run_agent(**options, session_id="agent-session-test")
+    with pytest.raises(ValueError, match="both session_id and session_dir"):
+        run_agent(**options, session_dir=tmp_path / "sessions")
+
+
 def test_completed_receipt_is_reused_without_rewriting_tool_evidence(tmp_path):
     options = dict(executable=str(fake_pi(tmp_path)), role="coordinator", prompt="{}", cwd=tmp_path,
                    output_dir=tmp_path / "out", timeout_seconds=5)

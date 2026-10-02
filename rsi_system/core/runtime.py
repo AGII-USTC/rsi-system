@@ -979,6 +979,8 @@ class RuntimeCoordinator:
                                       external_manifest=external_manifest,
                                       exploratory=task["role"] == "coder" and candidate is None,
                                       runtime_root=self.runtime_root, task_id=task["task_id"],
+                                      session_id=session_id_for(task),
+                                      session_dir=self.runtime_root / "pi-sessions",
                                       **({"decision_repair": True} if decision_repair else {}))
                 result = {**result, "payload": result.get("payload", result),
                           "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}

@@ -24,7 +24,12 @@ OpenCode, while keeping the RSI evidence boundary. A task directory retains
 the full `events.jsonl`, `agent_result.json` when available, and communication
 snapshot. `.rsi/runtime/sessions/<session_id>.jsonl` is only a compact index of
 turns, tool-call summaries, hashes, and failure classes; it is not a substitute
-for the original receipt.
+for the original receipt. Pi is invoked with the same `--session-id` and a
+separate `.rsi/runtime/pi-sessions/` directory for every task in the logical
+session. Pi therefore owns the append-only JSONL transcript, parent/leaf message
+tree, tool results, and native context compaction; the RSI ledger remains the
+cross-task audit index. A task with no logical session keeps `--no-session` and
+does not silently create a transcript.
 
 Tool calls have a state machine of `pending`, `completed`, and `failed`. If a
 worker exits while a call is pending, RSI writes an explicit

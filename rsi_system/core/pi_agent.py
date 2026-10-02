@@ -259,12 +259,20 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
               python_executable: str | None = None,
               external_manifest: Path | None = None, decision_repair: bool = False,
               disabled_tools: list[str] | None = None,
-              context_limit_tokens: int | None = None) -> dict:
+              context_limit_tokens: int | None = None, session_id: str | None = None,
+              session_dir: Path | None = None) -> dict:
     if role not in TOOLS or (timeout_seconds is not None and (
             type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 1800)):
         raise ValueError("invalid agent role or timeout")
     if thinking is not None and thinking not in THINKING_LEVELS:
         raise ValueError("invalid thinking level")
+    if (session_id is None) != (session_dir is None):
+        raise ValueError("Pi native session requires both session_id and session_dir")
+    if session_id is not None:
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("invalid Pi native session ID")
+        session_dir = Path(session_dir).resolve()
+        session_dir.mkdir(parents=True, exist_ok=True)
     cwd, output_dir = cwd.resolve(), output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     receipt = output_dir / "agent_result.json"
@@ -297,9 +305,13 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
     active_tools = [name for name in ("read" if decision_repair else TOOLS[role]).split(",")
                     if name not in disabled]
     (output_dir / "prompt.txt").write_text(prompt)
-    argv = [executable, "--mode", "json", "--print", "--no-session", "--no-approve",
+    argv = [executable, "--mode", "json", "--print", "--no-approve",
             "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-themes",
             "--no-extensions", "--tools", ",".join(active_tools)]
+    if session_id is None:
+        argv.insert(4, "--no-session")
+    else:
+        argv += ["--session-id", session_id, "--session-dir", str(session_dir)]
     if thinking is not None:
         argv += ["--thinking", thinking]
     if guard is not None:
