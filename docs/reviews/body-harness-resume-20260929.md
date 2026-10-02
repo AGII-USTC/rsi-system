@@ -328,3 +328,11 @@ version1012补足剩余48/12，保留142个历史模型任务和9个Runner；101
 本次尚无新Run：数据库仍8条Run，最近创建的`run-15e2b6ef0021a0bcc5258331`属于internal-memory-reader，时间2026-09-30 13:41:54北京时间；completed状态本身不构成真实pi0.5/LIBERO效果证据。本轮仅确认Wiki校验反馈与修正有效，没有新的科学收益。
 
 07:03状态读取成功后，kang与renlab两种已授权SSH登录接连发生banner exchange或连接超时；25秒超时的单次重试仍失败。Tailscale可经DERP收到327/499ms应答，但未建立直连，不能据此断言SSH、模型链路或校园网出口健康。模型端点及全节点测试命令因SSH失败未执行，没有新的节点质量结论。未改代理、模型配置、预算、任务状态、源码或原始记录；Mission在最后实际读取时已经自动暂停。
+
+## 2026-10-02 11:50 用户恢复网络后的断点续接
+
+用户确认刚刚断网并授权继续。11:48实查SSH正常，Mission paused/version1029、剩余44/12、无queued/running。AIHub经7897返回HTTP401，Gemini直连返回404、普通HTTP200；仅用作连通性检查，没有把它当成模型工作或科学结果。角色路由核验保持Coordinator Astra/high、独立重述Gemini/high、Curator GPT-6.1-Sol/medium、Researcher GPT-6.1-Sol/high。
+
+核验`task-304266f9587105c229a5`冻结outbox的3篇草稿哈希和数据库中成功rsi_wiki_check回执后，备份数据库到`.rsi/deployment/backups/network-return-20261002T034915Z/`。version1030补足剩余48/12，保留146个历史模型任务及9个Runner，上限194/21；1031保存交接，1032恢复原Mission，1033建立链接续接Curator `task-a366c0a66f4b00e519f0`。其任务明确从旧稿继续、自行重新核验当前来源和Wiki基准，再以rsi_wiki_submit接受回执完成，允许部分覆盖。未改旧任务输入、草稿、失败记录、模型路由或科学路线。记录`.rsi/deployment/network-return-curator-resume.json`。
+
+11:50:06实查active/version1034，接续Curator running，实际gpt-6.1-sol已有2次成功toolUse回复、8次read和3次grep，无模型错误；事件路径证明它读取了上一任务保存在新inbox中的草稿。剩余47/12。这确认模型和按文件接续恢复，尚未确认正式Wiki发布或新Run。证据`.rsi/deployment/network-return-curator-live.json`。原rsi-2每小时自动跟进已恢复ACTIVE，并补充操作约束：不要为排查网络在正常在途任务期间反复暂停/恢复Mission，以免再次使旧input失效。
