@@ -15,6 +15,19 @@ def _excerpt(value: Any, limit: int) -> str:
     return text.encode("utf-8")[:limit].decode("utf-8", errors="ignore")
 
 
+def _freeze_json(path: Path, value: dict) -> str:
+    """Write one immutable JSON source and return the hash of its exact bytes."""
+    raw = (json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
+    if path.is_symlink() or path.parent.is_symlink():
+        raise ValueError("context evidence source symlink is forbidden")
+    if path.exists():
+        if path.read_bytes() != raw:
+            raise ValueError("context evidence source is already frozen")
+    else:
+        atomic_json(path, value)
+    return hashlib.sha256(raw).hexdigest()
+
+
 def compile_prompt_context(context: dict, evidence_manifest: Path, task: dict,
                            *, max_inline_bytes: int = 48000) -> dict:
     # Historical context is only one part of the request. Leave room for Pi's
@@ -29,15 +42,7 @@ def compile_prompt_context(context: dict, evidence_manifest: Path, task: dict,
     snapshot = {"schema_version": 1, "task_id": task["task_id"],
                 "mission_id": task["mission_id"], "input_version": task["input_version"],
                 "context": context}
-    raw = (json.dumps(snapshot, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
-    digest = hashlib.sha256(raw).hexdigest()
-    if source.is_symlink() or source.parent.is_symlink():
-        raise ValueError("context evidence symlink is forbidden")
-    if source.exists():
-        if source.read_bytes() != raw:
-            raise ValueError("context evidence snapshot is already frozen")
-    else:
-        atomic_json(source, snapshot)
+    digest = _freeze_json(source, snapshot)
     relative = source.relative_to(manifest_path.parent).as_posix()
     existing = [item for item in manifest["files"] if item["path"] == relative]
     if existing:
@@ -153,11 +158,20 @@ def compile_prompt_context(context: dict, evidence_manifest: Path, task: dict,
                                           "task responsibility. This preview is not all available handoffs.")
 
     # Always start with small indexes, even when all historical records would fit.
-    # Keep active work visible; recency is a navigation aid, not scientific value.
+    # Keep a bounded active preview; counts and source refs cover omitted work.
     compact["context_sources"]["task_count"] = len(tasks)
     compact["context_sources"]["tasks_ref"] = ref("/tasks")
-    compact["tasks"] = [item for index, item in enumerate(tasks)
-                        if item["status"] in {"queued", "running"} or index >= len(tasks) - 6]
+    active_task_indexes = [index for index, item in enumerate(tasks)
+                           if item["status"] in {"queued", "running"}]
+    compact["context_sources"]["active_task_count"] = len(active_task_indexes)
+    compact["context_sources"]["active_tasks_ref"] = ref("/tasks")
+
+    def task_view(active_limit: int, recent_limit: int) -> list[dict]:
+        active = set(active_task_indexes[-active_limit:] if active_limit else [])
+        recent = set(range(max(0, len(tasks) - recent_limit), len(tasks))) if recent_limit else set()
+        return [item for index, item in enumerate(tasks) if index in active or index in recent]
+
+    compact["tasks"] = task_view(24, 6)
     for field in identities:
         compact["context_sources"][field + "_count"] = len(context.get(field, []))
         compact["context_sources"][field + "_ref"] = ref("/" + field)
@@ -176,16 +190,80 @@ def compile_prompt_context(context: dict, evidence_manifest: Path, task: dict,
             "source_ref": ref(f"/research_graph/composition_sources/{index}")}
             for index, item in enumerate(sources) if index >= len(sources) - 6]
 
+    # Keep a small navigational source beside the complete snapshot.  Agents
+    # can choose one JSON pointer for the next decision instead of guessing
+    # that the whole context file belongs in the conversation.
+    descriptions = {
+        "mission": "Mission authorization, objective, resources, and stop conditions",
+        "task": "Current assigned task and scope",
+        "research_mandate": "Task-specific research constraints and observations",
+        "runtime_status": "Resource and task counts captured when this prompt was built",
+        "resource_status": "Alias of the runtime resource snapshot",
+        "recovery": "Bounded continuation and failure-recovery pointers",
+        "communications": "Frozen inbox manifest and authored handoff addresses",
+        "knowledge": "Wiki/source index and bounded retrieval metadata",
+        "curation": "Curator source index and pending publication records",
+        "research_graph": "Research nodes, relations, and composition lineage",
+        "tasks": "Task status and result pointers",
+        "events": "Recorded runtime event pointers",
+        "hypotheses": "Formal hypothesis revisions",
+        "candidates": "Formal candidate admissions",
+        "runs": "Recorded controlled Run projections",
+        "idea_runs": "Run projections scoped to the current Idea",
+        "research_checkpoints": "Source-addressed researcher checkpoints",
+        "exploration_portfolio": "Open questions and final-review feedback pointers",
+        "stop_failure_review": "Failed-task review required before a coordinator stop",
+        "latest_run": "Most recent Run for the assigned candidate",
+        "candidate": "Assigned candidate metadata",
+        "candidate_hypothesis": "Hypothesis revision attached to the candidate",
+    }
+    index_entries = []
+    for key, description in descriptions.items():
+        if key not in context:
+            continue
+        value = context[key]
+        entry = {"key": key, "description": description,
+                 "json_pointer": "/context/" + key}
+        if isinstance(value, list):
+            entry["count"] = len(value)
+        elif isinstance(value, dict):
+            entry["fields"] = sorted(value.keys())[:64]
+        index_entries.append(entry)
+    index_payload = {
+        "schema_version": 1,
+        "task_id": task["task_id"],
+        "mission_id": task["mission_id"],
+        "full_context": {"path": str(source), "sha256": digest,
+                          "json_pointer": "/context",
+                          "read_policy": "Read only the listed JSON pointer needed for the next decision."},
+        "sources": index_entries,
+        "read_policy": "Addresses are navigation metadata, not authorization. Verify the returned sha256 and read pages with rsi_read_source; use task tools for live status.",
+    }
+    index_path = manifest_path.parent / "context/index.json"
+    index_digest = _freeze_json(index_path, index_payload)
+    index_relative = index_path.relative_to(manifest_path.parent).as_posix()
+    index_existing = [item for item in manifest["files"] if item["path"] == index_relative]
+    if index_existing:
+        if len(index_existing) != 1 or index_existing[0]["sha256"] != index_digest:
+            raise ValueError("context source index hash mismatch")
+    else:
+        manifest["files"].append({"run_id": "context", "path": index_relative,
+                                  "source": "Task prompt source index", "sha256": index_digest,
+                                  "verification": "task-scoped source addresses; not scientific findings"})
+        atomic_json(manifest_path, manifest)
+    compact["context_sources"]["index_ref"] = {"path": str(index_path), "sha256": index_digest}
+    compact["context_sources"]["index_read_policy"] = (
+        "Read index_ref first. Select only the JSON pointer needed for the next decision, "
+        "then page that source with its hash; do not read full_context_ref unless a complete snapshot is required.")
+
     def size() -> int:
         return len(json.dumps(compact, ensure_ascii=False).encode("utf-8"))
 
     if size() > max_inline_bytes:
         compact["context_sources"]["tasks_ref"] = ref("/tasks")
         compact["context_sources"]["task_count"] = len(tasks)
-        for recent_limit in (3, 0):
-            compact["tasks"] = [item for index, item in enumerate(tasks)
-                                if item["status"] in {"queued", "running"}
-                                or (recent_limit > 0 and index >= len(tasks) - recent_limit)]
+        for active_limit, recent_limit in ((8, 3), (0, 0)):
+            compact["tasks"] = task_view(active_limit, recent_limit)
             for field in identities:
                 items = compact[field]
                 if len(items) > recent_limit:

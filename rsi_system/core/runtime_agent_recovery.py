@@ -7,6 +7,7 @@ and for the next Agent turn; it never treats a retry as scientific evidence.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 
@@ -78,14 +79,26 @@ def session_id_for(task: Mapping[str, Any]) -> str:
     return f"agent-session-{task['task_id']}"
 
 
+def session_dir_for(task: Mapping[str, Any], runtime_root: Path) -> Path:
+    """Return a writable, durable transcript directory for this logical session."""
+    continuation = (task.get("scope") or {}).get("continuation") or {}
+    configured = continuation.get("session_dir")
+    if isinstance(configured, str) and configured.strip():
+        return Path(configured).resolve()
+    return (Path(runtime_root).resolve() / "tasks" / task["task_id"] /
+            "workspace" / ".pi-session").resolve()
+
+
 def continuation_metadata(task: Mapping[str, Any], *, mode: str,
                           failure: Mapping[str, Any] | None = None,
-                          event_cursor: int | None = None) -> dict[str, Any]:
+                          event_cursor: int | None = None,
+                          session_dir: str | None = None) -> dict[str, Any]:
     """Build the small handoff object; full history stays in immutable files."""
     return {
         "objective": str(task.get("objective") or "Continue the previous Agent turn"),
         "mode": mode,
         "session_id": session_id_for(task),
+        "session_dir": session_dir,
         "source_task_id": task["task_id"],
         "after_task_ids": [],
         "event_cursor": event_cursor,

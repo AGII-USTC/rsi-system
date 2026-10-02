@@ -1,8 +1,9 @@
 """Durable Agent-session and interrupted-tool recovery contracts."""
 import json
+from pathlib import Path
 
 from rsi_system.core.runtime import MissionSpec, RuntimeStore
-from rsi_system.core.runtime_agent_recovery import continuation_metadata, session_id_for
+from rsi_system.core.runtime_agent_recovery import continuation_metadata, session_dir_for, session_id_for
 from rsi_system.core.runtime_research_continuation import continuation_ready
 
 
@@ -32,3 +33,15 @@ def test_recovery_continuation_keeps_logical_session_and_accepts_failed_source(t
         assert session_id_for(child) == session_id_for(claimed)
         assert continuation_ready(store, child) == (True, None)
         assert child["scope"]["continuation"]["mode"] == "protocol_correction"
+
+
+def test_native_session_directory_is_writable_and_continuations_reuse_it(tmp_path):
+    task = {"task_id": "source", "scope": {"continuation": None}}
+    first = session_dir_for(task, tmp_path / ".rsi/runtime")
+    assert first == (tmp_path / ".rsi/runtime/tasks/source/workspace/.pi-session").resolve()
+    continuation = {"task_id": "child", "scope": {"continuation": {"session_dir": str(first)}}}
+    assert session_dir_for(continuation, tmp_path / ".rsi/runtime") == first
+    first.mkdir(parents=True)
+    probe = first / "write-probe"
+    probe.write_text("ok")
+    assert probe.read_text() == "ok"

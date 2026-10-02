@@ -28,7 +28,7 @@ from .runtime_decision_repair import (repair_source, repair_prompt,
                                      normalize_repaired_response, schedule_response_repair,
                                      successful_response_repairs)
 from .runtime_agent_recovery import (classify_agent_failure, continuation_metadata,
-                                     session_id_for)
+                                     session_dir_for, session_id_for)
 from .pi_agent import atomic_json
 from .runtime_roles import ROLE_GUIDANCE, model_policy
 from .runtime_communications import (prepare_communications, communication_context, load_manifest,
@@ -825,6 +825,8 @@ class RuntimeCoordinator:
             "actual access error. Raw original .rsi paths remain private; use copied paths relative to the manifest "
             "directory for Run evidence. The external_readonly_manifest lists server research, code, results, and "
             "model roots that may be inspected in place; they are read-only and the model is never copied into the task. "
+            "When context.context_sources.index_ref is present, read that small source index first and select only "
+            "the file address or JSON pointer needed for the next decision; do not read context/full.json wholesale. "
             "To revise a hypothesis, call rsi_register_hypothesis with its hypothesis_id, expected_version and revision_reason; "
             "supply all six structured fields and status. New hypotheses use expected_version=0. "
             "Candidate admission through rsi_register_candidate requires candidate_ready, hypothesis_id, hypothesis_version, "
@@ -980,7 +982,7 @@ class RuntimeCoordinator:
                                       exploratory=task["role"] == "coder" and candidate is None,
                                       runtime_root=self.runtime_root, task_id=task["task_id"],
                                       session_id=session_id_for(task),
-                                      session_dir=self.runtime_root / "pi-sessions",
+                                      session_dir=session_dir_for(task, self.runtime_root),
                                       **({"decision_repair": True} if decision_repair else {}))
                 result = {**result, "payload": result.get("payload", result),
                           "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
@@ -1166,8 +1168,10 @@ class RuntimeCoordinator:
         mode = "protocol_correction" if failure and failure.get("kind") in {
             "output_parse_error", "schema_error", "semantic_reference_error"
         } else ("model_retry" if allow_without_tools else "tool_recovery")
-        metadata = continuation_metadata(task, mode=mode, failure=failure,
-                                         event_cursor=store.mission(task["mission_id"])["version"])
+        metadata = continuation_metadata(
+            task, mode=mode, failure=failure,
+            event_cursor=store.mission(task["mission_id"])["version"],
+            session_dir=str(session_dir_for(task, self.runtime_root)))
         continuation = store.create_task(task["mission_id"], task["role"],
             f"Continue {task['objective']} using durable child results and failed tool receipts",
             recovery_reason or f"Recover interrupted task {task['task_id']} without repeating completed children",

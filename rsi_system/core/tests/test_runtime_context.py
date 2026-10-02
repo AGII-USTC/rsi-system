@@ -104,6 +104,47 @@ def test_large_outputs_have_small_projections_and_complete_hash_verified_sources
     assert source_record(full_ref) == before
 
 
+def test_context_index_is_a_frozen_navigation_source(tmp_path):
+    task = {"task_id": "coordinator-index", "mission_id": "m", "role": "coordinator",
+            "status": "running", "input_version": 4, "objective": "Choose evidence",
+            "scope": {}}
+    context = {"mission": {"mission_id": "m", "objective": "Choose evidence"},
+               "task": task, "tasks": [{"task_id": "child", "status": "completed"}],
+               "events": [], "research_graph": {"nodes": [], "relations": [], "compositions": []}}
+    manifest = manifest_for(tmp_path, task)
+
+    compact = compile_prompt_context(context, manifest, task)
+
+    index_ref = compact["context_sources"]["index_ref"]
+    index = source_record(index_ref)
+    full_ref = compact["context_sources"]["full_context_ref"]
+    assert index["full_context"]["path"] == full_ref["path"]
+    assert index["full_context"]["sha256"] == full_ref["sha256"]
+    entries = {item["key"]: item for item in index["sources"]}
+    assert entries["tasks"]["json_pointer"] == "/context/tasks"
+    assert entries["tasks"]["count"] == 1
+    manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    index_entry = next(item for item in manifest_data["files"] if item["path"] == "context/index.json")
+    assert index_entry["sha256"] == index_ref["sha256"]
+    assert compile_prompt_context(context, manifest, task) == compact
+
+
+def test_active_task_preview_is_bounded_and_keeps_source_index(tmp_path):
+    task = {"task_id": "coordinator-active", "mission_id": "m", "role": "coordinator",
+            "status": "running", "input_version": 5, "objective": "Choose evidence",
+            "scope": {}}
+    tasks = [{"task_id": f"active-{index}", "status": "running", "scope": {}}
+             for index in range(200)]
+    context = {"mission": {"mission_id": "m"}, "task": task, "tasks": tasks,
+               "events": [], "research_graph": {"nodes": [], "relations": [], "compositions": []}}
+
+    compact = compile_prompt_context(context, manifest_for(tmp_path, task), task, max_inline_bytes=12_000)
+
+    assert len(compact["tasks"]) <= 8
+    assert compact["context_sources"]["active_task_count"] == 200
+    assert compact["context_sources"]["active_tasks_ref"]["json_pointer"] == "/context/tasks"
+
+
 def test_context_compilation_does_not_change_recorded_task_results(tmp_path):
     with RuntimeStore(tmp_path / "state.sqlite3") as store:
         store.create_mission(MissionSpec("m", "Retain original research evidence"))
@@ -679,7 +720,8 @@ def test_runtime_passes_configured_cap_and_archives_only_new_prompt(tmp_path, mo
     with pytest.raises(KeyboardInterrupt):
         runtime.tick(agent_runner=lambda **kwargs: (calls.append(kwargs) or decision(action="wait")))
     assert calls[0]["session_id"].startswith("agent-session-")
-    assert calls[0]["session_dir"] == runtime.runtime_root / "pi-sessions"
+    assert calls[0]["session_dir"].parent == runtime.runtime_root / "tasks" / task["task_id"] / "workspace"
+    assert calls[0]["session_dir"].name == ".pi-session"
     monkeypatch.setattr(RuntimeCoordinator, "_handle_coordinator", original)
     assert calls[0]["context_limit_tokens"] == 64_000
     frozen = runtime.runtime_root / "tasks" / task["task_id"] / "input.json"
