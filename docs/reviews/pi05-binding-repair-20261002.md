@@ -49,17 +49,32 @@ Its content identity is
 It binds the historical response-contrast adapter, report and task6/chunk1
 request identified by `task-09d97dc0ed332b5cbe0b`.
 
-Subsequent SSH/SCP transfers intermittently timed out. The staged service
-and acceptance files must be hash-checked before deployment. Production Runner
-profiles have not yet been changed by this repair, and the new real-weight
-acceptance has not completed. In particular, actual service metadata,
-Runner-readable artifact mounts, loader compatibility and inference/simulator
-receipts remain pending runtime verification. The manifest identifies current
-local checkpoint content; it is not an independently authenticated upstream
-official checksum.
+Subsequent SSH/SCP transfers initially timed out. Connectivity then recovered,
+and the user authorized deployment, writable research implementations and
+continuation of the same Mission. The manifest identifies current local
+checkpoint content; it is not an independently authenticated upstream official
+checksum.
 
-Resume repair by verifying the staged files, backing up the private config,
-providing read-only bindings/artifacts/loader mounts and a nonduplicating
-in-process profile, then executing acceptance against the real checkpoint.
-Keep the Mission and automation paused until the user's next instruction.
-Report engineering acceptance separately from closed-loop adaptation gains.
+## 自主管理部署与验收续接
+
+2026-10-02 已备份数据库、实际 `experiments/rsi_control_plane/runtime.py`
+及私有配置。核对远端文件后，只部署本次任务上下文改动，保留服务器历史修改。
+Mission version 1305 授权 `pi05-self-managed` GPU 环境；既有环境保留。
+新环境无常驻 policy 副本，挂载真实 checkpoint、源码、Memory、adapter、report、
+请求样本和绑定清单。Agent 可以修改自己的部署代码、配置和驱动；Runner 可以
+加载模型、管理自己的本地策略子进程并写产物。原始权重和历史证据保持只读。
+部署指南见 `docs/design/pi05-rsi-self-managed-deployment.md`，不是仅授予只读浏览。
+
+本地相关回归 46 项通过、2 项跳过；远端在隔离测试配置下 29 项通过、1 项跳过。
+第一次远端测试被生产私有配置覆盖测试路由，保留该失败输出，隔离配置后通过。
+
+首轮真实 GPU 验收完成两次加载、七次策略调用及两次 LIBERO 动作观测。
+另有十步预热。但首轮在已编译实例上修改 alpha，零门控输出仍与 memory 相同，
+所以该零门控比较不能作为有效对照。原始回执完整保留；验收脚本已改为每个比较臂
+首次推理前独立加载，在新的不可变部署快照中重新验收。
+
+续接证据位于服务器
+`.rsi/deployment/pi05-binding-repair-20261002/self-managed-activation.json`。
+第二轮快照为 `self-managed-v2-20261002T090947Z/`。
+这些工程调用不计作 Mission 的科学收益。用户追加授权在恢复时把剩余预算补足
+48 个模型任务、12 次实验；历史消耗与失败不删除、不退款。

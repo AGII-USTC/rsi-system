@@ -28,7 +28,6 @@ def main():
     save()
     try:
         import jax
-        import jax.numpy as jnp
         import numpy as np
         from pi05_policy_service import load_bound_policy
         from pi05_bindings import verify_manifest, sha256_file
@@ -60,15 +59,17 @@ def main():
             save()
             return actions
 
-        for mode in ('official', 'memory'):
+        # A compiled policy may capture its parameters; changing alpha after
+        # inference does not reliably change the executable. Load each arm fresh.
+        for mode in ('official', 'zero-gate', 'memory'):
             tick = time.monotonic()
             wrapper, metadata = load_bound_policy(args.manifest, roots, mode=mode)
             report['checkpoint_loads'] += 1
             report[mode + '_identity'] = metadata
             report['stages'].append({'stage': 'load_' + mode, 'wall_seconds': time.monotonic() - tick})
             save()
-            infer(wrapper, mode, request)
-            if mode == 'official':
+            infer(wrapper, mode.replace('-', '_'), request)
+            if mode != 'memory':
                 del wrapper
                 gc.collect()
                 jax.clear_caches()
@@ -77,11 +78,7 @@ def main():
         infer(wrapper, 'empty', empty)
         reader = (wrapper.policy._model.memory_adapter if metadata['position'] == 'output'
                   else wrapper.policy._model.velocity_memory_adapter)
-        alpha = np.asarray(reader.alpha.value).copy()
-        report['trained_alpha'] = alpha.tolist()
-        reader.alpha.value = jnp.zeros_like(reader.alpha.value)
-        infer(wrapper, 'zero_gate', request)
-        reader.alpha.value = jnp.asarray(alpha)
+        report['trained_alpha'] = np.asarray(reader.alpha.value).tolist()
         infer(wrapper, 'memory_repeat', request)
         report['repeat_exact'] = bool(np.array_equal(outputs['memory'], outputs['memory_repeat']))
         report['physical_deltas_to_official'] = {
@@ -90,6 +87,10 @@ def main():
             for label, action in outputs.items()}
         if not report['repeat_exact']:
             raise ValueError('Repeated bound fixed-noise inference is not deterministic')
+        report['zero_gate_matches_official'] = bool(np.array_equal(outputs['zero_gate'], outputs['official']))
+        report['empty_matches_official'] = bool(np.array_equal(outputs['empty'], outputs['official']))
+        if not report['zero_gate_matches_official'] or not report['empty_matches_official']:
+            raise ValueError('Empty-mask or separately loaded zero-gate policy differs from the official baseline')
 
         if args.simulator_smoke:
             from libero.libero import benchmark

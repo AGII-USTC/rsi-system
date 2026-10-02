@@ -48,6 +48,37 @@ def test_semantic_role_and_explicit_model_reach_invocation_and_ledger(tmp_path, 
         assert policy["model"]["model"] == f"{role}-fixture"
 
 
+def test_prompt_exposes_runnable_research_deployment_permissions(tmp_path):
+    root = project(tmp_path)
+    path = root / 'deployment/rsi/research.json'
+    config = json.loads(path.read_text())
+    config['runner_environments'] = {
+        'self-managed': {'image': 'existing-image', 'python': '/.venv/bin/python',
+                         'gpu': True, 'pythonpath': ['/app/src'],
+                         'mounts': [{'source': '/host/checkpoint', 'target': '/weights'}],
+                         'env': {'NOT_FOR_PROMPT': 'private-marker'}},
+        'resident': {'image': 'existing-image', 'policy': {'port': 8012}},
+    }
+    path.write_text(json.dumps(config))
+    coordinator = RuntimeCoordinator(root)
+    with RuntimeStore(coordinator.store_path) as store:
+        store.create_mission(MissionSpec('m', 'qualify actual model integration', resources={
+            'allowed_runner_environments': ['self-managed', 'resident']}))
+        store.create_task('m', 'researcher', 'implement and debug the policy', 'user request')
+        claimed = store.claim_task('m')
+        prompt = coordinator._prompt('researcher', store.mission('m'), claimed, store)
+    environments = json.loads(prompt.split('\n', 1)[1])['context']['exploration_contract']['available_environments']
+    managed = environments['self-managed']
+    assert managed['python'] == '/.venv/bin/python'
+    assert managed['mounts'] == [{'host_path': '/host/checkpoint', 'container_path': '/weights',
+                                 'mode': 'read-only'}]
+    assert managed['execution_permissions']['write'] == ['RSI_EXPLORATION_OUTPUT', '/tmp']
+    assert 'start and stop' in managed['execution_permissions']['policy_process']
+    assert 'Runtime starts' in environments['resident']['execution_permissions']['policy_process']
+    assert 'private-marker' not in prompt
+    assert 'Research policy deployments are allowed' in prompt
+
+
 def test_model_fallback_uses_research_model_for_hypothesis():
     config = {"models": {"researcher": {"model": "research"}, "reviewer": {"model": "review"}}}
     assert model_policy(config, "hypothesis")["models"]["hypothesis"]["model"] == "research"

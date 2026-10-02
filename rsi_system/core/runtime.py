@@ -674,11 +674,26 @@ class RuntimeCoordinator:
         allowed_environments = mission["payload"]["resources"].get("allowed_runner_environments", [])
         context["exploration_contract"]["available_environments"] = {
             name: {"kind": "docker", "policy_service": bool(environment_config[name].get("policy")),
-                   "gpu": environment_config[name].get("gpu", False)}
+                   "gpu": environment_config[name].get("gpu", False),
+                   "python": environment_config[name].get("python", "/usr/bin/python3"),
+                   "pythonpath": environment_config[name].get("pythonpath", []),
+                   "mounts": [{"host_path": item["source"], "container_path": item["target"],
+                               "mode": "read-only"}
+                              for item in environment_config[name].get("mounts", [])],
+                   "execution_permissions": {
+                       "write": ["RSI_EXPLORATION_OUTPUT", "/tmp"],
+                       "research_code": "Author and edit Python modules, loaders, service configuration, and simulation drivers in communications.workspace; publish them for Runner execution.",
+                       "policy_process": ("Runtime starts the configured policy service."
+                                          if environment_config[name].get("policy") else
+                                          "Your Runner script may load policies in process or start and stop its own local policy subprocesses; no resident policy is loaded by runtime.")}}
             for name in allowed_environments if name in environment_config}
         context["exploration_contract"]["default_environment"] = mission["payload"]["resources"].get("runner_environment")
         context["exploration_contract"]["environment_usage"] = (
-            "Select only an available environment name. Runtime owns images, read-only mounts, GPU and private networking. "
+            "Select only an available environment name; use its exact container paths, not host paths. "
+            "Runtime owns images, reference mounts, GPU and private networking. Your own research deployment code and "
+            "configuration are writable in communications.workspace and Runner output; reference weights and prior evidence remain read-only. "
+            "In an environment without a policy_service, your Runner code may load the real checkpoint, launch its own "
+            "local strategy service, inspect logs, and stop its subprocesses in finally blocks. "
             "For a policy-enabled environment use RSI_POLICY_HOST and RSI_POLICY_PORT; never start Docker yourself. "
             "Use RSI_EXPLORATION_INPUTS for published supporting files, RSI_EXPLORATION_OUTPUT for results. "
             "A successful preflight or process exit is not a policy, task-success or adaptation result.")
@@ -743,7 +758,10 @@ class RuntimeCoordinator:
             "after reading the receipt. The legacy experiment.review_roles field is metadata only. "
             "Keep ideas, observations, hypotheses, and confirmed measurements distinct. Preserve competing explanations. "
             "Do not fabricate citations, metrics, commits, or successful runs. Do not modify protected evaluators, data, "
-            "credentials, deployment, or the control plane. Every Agent has write/edit tools in its own "
+            "credentials, host infrastructure deployment, or the control plane. Research policy deployments are allowed "
+            "through the selected Runner environment: author and revise your own loader, service, and simulation code "
+            "in the task workspace, then publish it for execution; the mounted original source is a reference, not your editable implementation. "
+            "Every Agent has write/edit tools in its own "
             "communications.workspace: write notes, discussions, derivations, Wiki proposals, or prototype code there. "
             "Use absolute paths; nested directories can be created by write. Write a handoff.md with findings, "
             "uncertainties, and useful next questions. Read communications.inbox_manifest to discover earlier "
