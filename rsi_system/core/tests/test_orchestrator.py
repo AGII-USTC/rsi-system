@@ -199,6 +199,15 @@ def test_pi_parser_rejects_error_after_earlier_valid_message(tmp_path):
         final_payload(path)
 
 
+def test_pi_parser_rejects_multiple_json_objects_in_explanation(tmp_path):
+    path = tmp_path / "events.jsonl"
+    message = {"role": "assistant", "stopReason": "stop", "content": [{"type": "text",
+        "text": "I called rsi_wiki_check{} and now return:\n{\"summary\":\"ok\"}"}]}
+    path.write_text(json.dumps({"type": "message_end", "message": message}) + "\n")
+    with pytest.raises(ValueError, match="exactly one JSON object"):
+        final_payload(path)
+
+
 def test_pi_parser_preserves_provider_error(tmp_path):
     path = tmp_path / "events.jsonl"
     error = {"type": "message_end", "message": {"role": "assistant", "stopReason": "error",

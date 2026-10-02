@@ -94,6 +94,18 @@ def test_stop_without_useful_reframe_is_allowed(tmp_path):
         assert store.mission("m")["status"] == "stopped"
 
 
+def test_unknown_challenge_is_actionable_when_no_reframe_is_visible(tmp_path):
+    runtime = RuntimeCoordinator(project(tmp_path))
+    runtime.start(MissionSpec("m", "A bounded question", resources={"max_agent_tasks": 2}))
+    with RuntimeStore(runtime.store_path) as store:
+        actor = store.create_task("m", "coordinator", "Assess", "No reframe was dispatched")
+        actor = store.claim_task("m")
+        with pytest.raises(ValueError, match="challenge_responses must be \[\]"):
+            runtime._handle_coordinator(
+                store, store.mission("m"), actor,
+                {**decision("wait"), "challenge_responses": [{"task_id": "missing"}]})
+
+
 def stop_review(store, *, evidence_refs, disposition="defer", reframe_task_id=None):
     return {"decision": "stop", "summary": "Preserve the unresolved route comparison",
             "expected_information": "A matched test may change the ranking",

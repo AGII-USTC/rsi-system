@@ -99,23 +99,34 @@ def final_payload(events: Path) -> tuple[dict, dict]:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
+    decoder = json.JSONDecoder()
+    candidates = []
     try:
         payload = json.loads(text)
+        if isinstance(payload, dict):
+            candidates = [(0, len(text), payload)]
+        else:
+            payload = None
     except json.JSONDecodeError:
-        decoder = json.JSONDecoder()
         payload = None
+    if payload is None:
+        # Permit a short human preamble around one object, but never select
+        # the first object from a response containing two protocol payloads or
+        # a tool-shaped JSON fragment (the old parser did exactly that).
         for offset, char in enumerate(text):
-            if char != "{":
+            if char != "{" or any(start <= offset < end for start, end, _ in candidates):
                 continue
             try:
-                candidate, _ = decoder.raw_decode(text[offset:])
+                candidate, length = decoder.raw_decode(text[offset:])
             except json.JSONDecodeError:
                 continue
             if isinstance(candidate, dict):
-                payload = candidate
-                break
-        if payload is None:
-            raise ValueError("agent response must be one JSON object; return JSON or a single ```json``` object without multiple objects")
+                candidates.append((offset, offset + length, candidate))
+        if len(candidates) != 1:
+            raise ValueError(
+                "agent response must contain exactly one JSON object; return JSON or a single ```json``` object "
+                f"without multiple objects (found {len(candidates)})")
+        payload = candidates[0][2]
     if not isinstance(payload, dict):
         raise ValueError("agent response must be one JSON object")
     return payload, usage

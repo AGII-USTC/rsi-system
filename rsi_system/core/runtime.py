@@ -27,6 +27,8 @@ from .runtime_limits import recovery_parent
 from .runtime_decision_repair import (repair_source, repair_prompt,
                                      normalize_repaired_response, schedule_response_repair,
                                      successful_response_repairs)
+from .runtime_agent_recovery import (classify_agent_failure, continuation_metadata,
+                                     session_id_for)
 from .pi_agent import atomic_json
 from .runtime_roles import ROLE_GUIDANCE, model_policy
 from .runtime_communications import (prepare_communications, communication_context, load_manifest,
@@ -186,11 +188,35 @@ class RuntimeCoordinator:
             event_refs.append({"event_id": event.get("event_id"), "version": event.get("version"),
                                "kind": event.get("kind"), "task_id": payload.get("task_id") or
                                payload.get("source_task_id") or payload.get("interrupted_task_id")})
-        return {"source_tasks": source_tasks,
+        continuation = task.get("scope", {}).get("continuation") or {}
+        return {"session_id": session_id_for(task),
+                "continuation": {key: continuation.get(key) for key in
+                                  ("mode", "source_task_id", "event_cursor", "failure")
+                                  if key in continuation},
+                "source_tasks": source_tasks,
                 "event_refs": event_refs[-32:],
                 "communications_index": str(communication_manifest) if communication_manifest else None,
-                "read_policy": "Use rsi_status and rsi_read_handoff/file_id to choose source files; do not read another task workspace or replay the full event history.",
+                "read_policy": "Use rsi_status and rsi_read_handoff/file_id to choose source files; do not read another task workspace or replay the full event history. This is the same logical Agent session; continue from the failure cursor and do not repeat completed tool calls.",
                 "evidence_status": "addresses and failure metadata only; source claims remain unverified"}
+
+    def _append_session_event(self, task: dict[str, Any], *, status: str,
+                              prompt_hash: str | None = None,
+                              result: Mapping[str, Any] | None = None,
+                              failure: Mapping[str, Any] | None = None) -> None:
+        """Write a compact logical-session ledger; task receipts remain complete."""
+        session_id = session_id_for(task)
+        directory = self.runtime_root / "sessions"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{safe_id(session_id, 'session_id')}.jsonl"
+        record = {"session_id": session_id, "task_id": task["task_id"],
+                  "role": task["role"], "status": status, "created_at": _now(),
+                  "prompt_sha256": prompt_hash,
+                  "tool_calls": (result or {}).get("tool_calls", []) if result else [],
+                  "failure": dict(failure or {}),
+                  "receipt": str(self.runtime_root / "tasks" / task["task_id"] / "agent_result.json"),
+                  "events": str(self.runtime_root / "tasks" / task["task_id"] / "events.jsonl")}
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
     @staticmethod
     def _prompt_event_context(store: RuntimeStore, mission_id: str) -> list[dict[str, Any]]:
@@ -957,6 +983,10 @@ class RuntimeCoordinator:
                 result = {**result, "payload": result.get("payload", result),
                           "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
                 atomic_json(receipt, result)
+            self._append_session_event(
+                task, status="model_turn_completed",
+                prompt_hash=result.get("prompt_sha256") or hashlib.sha256(prompt.encode()).hexdigest(),
+                result=result)
             payload = result.get("payload", result)
             if decision_repair:
                 payload = normalize_repaired_response(payload)
@@ -1022,7 +1052,30 @@ class RuntimeCoordinator:
             reconcile_runtime_knowledge(self.root, store, mission["mission_id"])
             return {"status": "completed", "task_id": task["task_id"], "role": task["role"], "mission_id": mission["mission_id"]}
         except Exception as exc:
-            error = {"error": f"{type(exc).__name__}: {exc}"}
+            pending_tool_ids = []
+            try:
+                pending_tool_ids = store.interrupt_pending_tools(
+                    task["task_id"],
+                    reason=f"Agent invocation ended before this tool call completed: {type(exc).__name__}: {exc}")
+            except (OSError, ValueError, TypeError):
+                pass
+            protocol_failure = isinstance(exc, ValueError) and (
+                decision_repair or task["role"] == "coordinator" and (
+                    str(exc).startswith(("coordinator ", "challenge ", "challenge_", "stop_reframe_decision",
+                                         "deferred stop reframe", "reviewed failure", "reviewed_failures",
+                                         "agent response must be one JSON object")) or
+                    "reframe" in str(exc).lower() or "reference" in str(exc).lower()))
+            failure = classify_agent_failure(exc, protocol=protocol_failure,
+                                             tool_pending=bool(pending_tool_ids))
+            error = {"error": f"{type(exc).__name__}: {exc}", "failure": failure,
+                     "pending_tool_call_ids": pending_tool_ids}
+            try:
+                self._append_session_event(
+                    task, status="model_turn_failed",
+                    prompt_hash=(hashlib.sha256(prompt.encode()).hexdigest() if "prompt" in locals() else None),
+                    failure=failure)
+            except (OSError, ValueError, TypeError):
+                pass
             try:
                 with store.atomic():
                     store.finish_task(task["task_id"], task["lease_token"], error, status="failed")
@@ -1040,11 +1093,12 @@ class RuntimeCoordinator:
                     # retry and the two-failure pause guard would never run.  Other
                     # agent roles use the durable continuation recovery path.
                     retryable = (invocation_started and task["role"] != "curator"
-                                 and self._is_retryable_agent_failure(exc))
+                                 and bool(failure.get("retryable")))
                     try:
                         if task["role"] != "curator" and not schedule_response_repair(self, store, task, exc):
                             self._schedule_tool_continuation(
                                 store, task, allow_without_tools=retryable,
+                                failure=failure,
                                 recovery_reason=(f"Recover model invocation failure: {type(exc).__name__}: {exc}; "
                                                  "inspect the prior task error and do not duplicate completed child tasks"
                                                  if retryable else None))
@@ -1058,17 +1112,12 @@ class RuntimeCoordinator:
 
     @staticmethod
     def _is_retryable_agent_failure(exc: Exception) -> bool:
-        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return True
-        text = str(exc).lower()
-        return any(marker in text for marker in (
-            "provider unavailable", "provider invocation failed", "service unavailable",
-            "pi exited with status", "transport", "timed out", "timeout", "connection reset",
-            "connection refused", "rate limit", "api unavailable"))
+        return bool(classify_agent_failure(exc).get("retryable"))
 
     def _schedule_tool_continuation(self, store: RuntimeStore, task: dict[str, Any], *,
                                     allow_without_tools: bool = False,
-                                    recovery_reason: str | None = None) -> str | None:
+                                    recovery_reason: str | None = None,
+                                    failure: Mapping[str, Any] | None = None) -> str | None:
         if ((not allow_without_tools and not store.tool_operations(task["task_id"])) or
                 store.remaining_agent_tasks(task["mission_id"]) == 0):
             return None
@@ -1103,12 +1152,20 @@ class RuntimeCoordinator:
                 type(max_retry_seconds) is not int or max_retry_seconds < retry_seconds):
             raise ValueError("invalid runtime recovery backoff configuration")
         from datetime import datetime, timezone, timedelta
-        retry_not_before = (datetime.now(timezone.utc) + timedelta(
-            seconds=(min(max_retry_seconds, retry_seconds * max(1, attempts + 1)) if allow_without_tools else 0))).replace(microsecond=0).isoformat()
+        # Use a bounded exponential delay for provider/model retries.  Tool
+        # continuations can run immediately because the tool receipt is the
+        # durable handoff and no provider backoff is required.
+        retry_delay = min(max_retry_seconds, retry_seconds * (2 ** attempts)) if allow_without_tools else 0
+        retry_not_before = (datetime.now(timezone.utc) + timedelta(seconds=retry_delay)).replace(microsecond=0).isoformat()
         if any(item["role"] == task["role"] and item["scope"]["reply_to_task_id"] == task["task_id"]
                for item in store.list_tasks(task["mission_id"])):
             return None
         scope = task["scope"]
+        mode = "protocol_correction" if failure and failure.get("kind") in {
+            "output_parse_error", "schema_error", "semantic_reference_error"
+        } else ("model_retry" if allow_without_tools else "tool_recovery")
+        metadata = continuation_metadata(task, mode=mode, failure=failure,
+                                         event_cursor=store.mission(task["mission_id"])["version"])
         continuation = store.create_task(task["mission_id"], task["role"],
             f"Continue {task['objective']} using durable child results and failed tool receipts",
             recovery_reason or f"Recover interrupted task {task['task_id']} without repeating completed children",
@@ -1119,10 +1176,12 @@ class RuntimeCoordinator:
             research_mandate=scope.get("research_mandate"),
             review_run_id=scope.get("review_run_id"),
             task_kind=scope.get("task_kind", "standard"),
-            experiment=scope.get("experiment"), retry_not_before=retry_not_before)
+            experiment=scope.get("experiment"), retry_not_before=retry_not_before,
+            continuation=metadata)
         store.event(task["mission_id"], "model_task_continued" if allow_without_tools else "tool_task_continued", {
             "interrupted_task_id": task["task_id"], "continuation_task_id": continuation["task_id"],
-            "reason": recovery_reason,
+            "reason": recovery_reason, "mode": mode,
+            "session_id": metadata["session_id"], "failure": dict(failure or {}),
             "remaining_delegate_budget": None})
         return continuation["task_id"]
 

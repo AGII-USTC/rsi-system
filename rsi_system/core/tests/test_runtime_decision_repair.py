@@ -12,17 +12,19 @@ from .test_orchestrator import project
 from .test_runtime_reframe import decision, report
 
 
-def setup_repair(tmp_path, rejected_payload=None):
+def setup_repair(tmp_path, rejected_payload=None, include_reframe=True):
     runtime = RuntimeCoordinator(project(tmp_path))
     runtime.start(MissionSpec('m', 'Explore mechanisms', resources={'max_agent_tasks': 8}))
     with RuntimeStore(runtime.store_path) as store:
         parent = store.create_task('m', 'coordinator', 'Plan', 'Initial', research_node_id='m-root', research_revision=1)
         parent = store.claim_task('m')
-        child = store.create_task('m', 'researcher', 'Independent question', 'Challenge',
-                                  parent_task_id=parent['task_id'], task_kind='problem_reframe')
-        child = store.claim_task('m')
-        runtime._handle_research(store, store.mission('m'), child, report())
-        store.finish_task(child['task_id'], child['lease_token'], {'payload': report()})
+        child = None
+        if include_reframe:
+            child = store.create_task('m', 'researcher', 'Independent question', 'Challenge',
+                                      parent_task_id=parent['task_id'], task_kind='problem_reframe')
+            child = store.claim_task('m')
+            runtime._handle_research(store, store.mission('m'), child, report())
+            store.finish_task(child['task_id'], child['lease_token'], {'payload': report()})
         store.finish_task(parent['task_id'], parent['lease_token'], {'summary': 'Plan complete'})
         actor = store.create_task('m', 'coordinator', 'Review', 'New report')
         actor = store.claim_task('m')
@@ -137,6 +139,26 @@ def test_repair_accepts_explicit_empty_dispatch_fields(tmp_path):
                                   require_model=False)
         assert result['status'] == 'completed'
         assert successful_response_repairs(store, 'm') == 1
+
+
+def test_repair_prompt_requires_empty_challenges_without_visible_reframe(tmp_path):
+    rejected = {'summary': 'Invalid challenge reference',
+                'challenge_responses': [{'task_id': 'missing'}]}
+    runtime, original, _, _ = setup_repair(tmp_path, rejected_payload=rejected,
+                                           include_reframe=False)
+    with RuntimeStore(runtime.store_path) as store:
+        repair = claim_repair(store)
+        prompt = runtime._prompt('coordinator', store.mission('m'), repair, store)
+        document = json.loads(prompt.split('\n', 1)[1])
+        assert document['context']['eligible_reframes'] == []
+        assert document['response_contract']['challenge_responses'].startswith('[]')
+        assert 'set challenge_responses to [] exactly' in document['context']['instructions']
+        result = runtime._execute(
+            store, store.mission('m'), repair,
+            agent_runner=lambda **_: {'decision': 'wait', 'summary': 'No reframe to acknowledge',
+                                      'challenge_responses': []}, require_model=False)
+        assert result['status'] == 'completed'
+        assert store.task(original['task_id'])['status'] == 'failed'
 
 
 def test_recovery_context_is_source_addressed_for_followup_research(tmp_path):

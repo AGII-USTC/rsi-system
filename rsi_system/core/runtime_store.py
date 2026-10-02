@@ -200,6 +200,29 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
                               (safe_id(task_id, "task_id"), safe_id(call_id, "call_id"))).fetchone()
         return dict(row) if row else None
 
+    def interrupt_pending_tools(self, task_id: str, *, reason: str) -> list[str]:
+        """Close dangling tool calls with a replayable interrupted result.
+
+        A continuation must never inherit an unmatched pending call.  The
+        original request remains in the row and the generated response makes
+        the protocol boundary explicit to the next Agent turn.
+        """
+        now = _now()
+        response = {"ok": False, "error": {
+            "code": "interrupted_tool_call", "message": _text(reason, "reason"),
+            "retryable": True, "repair": "Inspect the saved request and retry only if it is still needed."
+        }}
+        rows = self.db.execute("SELECT call_id FROM rsi_tool_operations WHERE task_id=? AND status IN ('pending','resuming')",
+                               (safe_id(task_id, "task_id"),)).fetchall()
+        call_ids = [row[0] for row in rows]
+        if call_ids:
+            self.db.executemany("""UPDATE rsi_tool_operations
+                SET status='failed', response_json=?, updated_at=?
+                WHERE task_id=? AND call_id=? AND status IN ('pending','resuming')""",
+                [(_json(response), now, task_id, call_id) for call_id in call_ids])
+            self._commit()
+        return call_ids
+
     def put_tool_operation(self, task_id: str, call_id: str, tool: str, request_sha256: str,
                            status: str, response: Mapping[str, Any] | None = None) -> None:
         now = _now()
@@ -368,12 +391,29 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
             after_task_ids = continuation.get("after_task_ids", [])
             if not isinstance(after_task_ids, list):
                 raise ValueError("continuation.after_task_ids must be a list")
+            mode = continuation.get("mode", "research")
+            if mode not in {"research", "tool_recovery", "model_retry", "protocol_correction"}:
+                raise ValueError("continuation.mode is not supported")
+            source_task_id = continuation.get("source_task_id") or parent_task_id
+            if not isinstance(source_task_id, str) or not source_task_id.strip():
+                raise ValueError("continuation.source_task_id is required")
+            session_id = continuation.get("session_id")
+            # Legacy researcher checkpoints predate logical session metadata;
+            # derive a stable ID so their gating semantics remain unchanged.
+            if mode == "research" and (not isinstance(session_id, str) or not session_id.strip()):
+                session_id = f"agent-session-{source_task_id}"
+            if not isinstance(session_id, str) or not session_id.strip():
+                raise ValueError("continuation.session_id is required")
             continuation = {"objective": _text(continuation.get("objective"), "continuation.objective"),
                             "after_task_ids": after_task_ids,
-                            "source_task_id": parent_task_id}
+                            "source_task_id": source_task_id,
+                            "mode": mode,
+                            "session_id": session_id,
+                            "event_cursor": continuation.get("event_cursor"),
+                            "failure": continuation.get("failure") or {}}
             if any(not isinstance(item, str) or not item.strip() for item in continuation["after_task_ids"]):
                 raise ValueError("continuation.after_task_ids must be a list of nonempty strings")
-            if role != "researcher" or not parent_task_id:
+            if mode == "research" and (role != "researcher" or not parent_task_id):
                 raise ValueError("continuation must be a researcher child of its source task")
         if candidate_id is not None:
             safe_id(candidate_id, "candidate_id")
@@ -408,7 +448,12 @@ class RuntimeStore(ResearchGraph, HypothesisRecords, RuntimeLimits):
         if parent_task_id and (parent is None or parent["mission_id"] != mission_id):
             raise ValueError("parent task belongs to another Mission")
         if continuation is not None:
-            if any(dependency_id == parent_task_id for dependency_id in continuation["after_task_ids"]):
+            source_task = self.task(continuation["source_task_id"])
+            if source_task is None or source_task["mission_id"] != mission_id:
+                raise ValueError("continuation source belongs to another Mission or is missing")
+            if continuation["mode"] != "research" and source_task["status"] not in {"running", "completed", "failed", "cancelled"}:
+                raise ValueError("recovery continuation source is not terminal or active")
+            if any(dependency_id == continuation["source_task_id"] for dependency_id in continuation["after_task_ids"]):
                 raise ValueError("continuation cannot depend on itself or its source task")
             for dependency_id in continuation["after_task_ids"]:
                 dependency = self.task(dependency_id)

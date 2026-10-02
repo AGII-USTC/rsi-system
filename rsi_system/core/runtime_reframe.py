@@ -59,6 +59,15 @@ def validate_challenge_responses(store: Any, mission_id: str, task: Mapping[str,
     normalized = []
     seen = set()
     inventory = {item["task_id"]: item for item in reframe_inventory(store, mission_id)}
+    eligible = {task_id for task_id, item in inventory.items()
+                if item["status"] == "completed"
+                and item["report_version"] is not None
+                and item["report_version"] <= task["input_version"]
+                and not item["acknowledged"]}
+    if raw and not eligible:
+        raise ValueError(
+            "challenge_responses must be [] because no completed unacknowledged reframe "
+            "is visible at this input version")
     for item in raw:
         if not isinstance(item, Mapping):
             raise ValueError("challenge response must be an object")
@@ -70,7 +79,9 @@ def validate_challenge_responses(store: Any, mission_id: str, task: Mapping[str,
                 challenge["status"] != "completed" or task_id in seen or not prior or
                 prior["acknowledged"] or prior["report_version"] is None or
                 prior["report_version"] > task["input_version"]):
-            raise ValueError("challenge response must reference one completed unacknowledged reframe")
+            raise ValueError(
+                "challenge response must reference one completed unacknowledged reframe "
+                "visible at this input version")
         disposition = item.get("disposition")
         if disposition not in {"adopt", "defer", "reject"}:
             raise ValueError("challenge disposition must be adopt, defer, or reject")

@@ -4,6 +4,16 @@ from pathlib import Path
 
 from .runtime_reframe import reframe_inventory
 from .runtime_limits import recovery_parent
+from .runtime_agent_recovery import classify_agent_failure
+
+
+def eligible_reframes(store, mission_id, input_version):
+    """Return only reframe reports this correction is allowed to acknowledge."""
+    return [item for item in reframe_inventory(store, mission_id)
+            if item["status"] == "completed"
+            and item["report_version"] is not None
+            and item["report_version"] <= input_version
+            and not item["acknowledged"]]
 
 
 def repair_source(store, task):
@@ -83,6 +93,7 @@ def schedule_response_repair(coordinator, store, task, exc):
         return False
     recovery_id = coordinator._schedule_tool_continuation(
         store, task, allow_without_tools=True,
+        failure=classify_agent_failure(exc, protocol=True),
         recovery_reason=(f"Correct rejected Coordinator response: {error}; use the saved error and handoff index, "
                          "do not repeat research or dispatch work"))
     if recovery_id:
@@ -121,6 +132,17 @@ def repair_prompt(coordinator, store, task, communication_manifest=None):
                              for item in data.get("files", []) if item.get("path")]
         except (OSError, ValueError, TypeError):
             indexed_files = []
+    available_reframes = eligible_reframes(store, task["mission_id"], task["input_version"])
+    if available_reframes:
+        challenge_contract = "List of {task_id, disposition: adopt|defer|reject, reason, next_test}; include exactly one entry for each item in context.eligible_reframes"
+        challenge_instruction = (
+            "Acknowledge every item in context.eligible_reframes exactly once. "
+            "Do not use task IDs from context.reframes unless they also appear in eligible_reframes.")
+    else:
+        challenge_contract = "[] (no completed unacknowledged problem_reframe is visible at this input_version)"
+        challenge_instruction = (
+            "context.eligible_reframes is empty: set challenge_responses to [] exactly. "
+            "Do not invent a task ID, acknowledge pending/failed reports, or copy IDs from historical context.")
     return "Correct one rejected coordinator response. Research and dispatch are disabled.\n" + json.dumps({
         "role": "coordinator",
         "response_contract": {"decision": "wait (the runtime will reject schedule or stop during repair)",
@@ -128,7 +150,7 @@ def repair_prompt(coordinator, store, task, communication_manifest=None):
                               "expected_information": "string",
                               "budget_impact": "string",
                               "stop_condition": "string",
-                              "challenge_responses": "List of {task_id, disposition: adopt|defer|reject, reason, next_test}",
+                              "challenge_responses": challenge_contract,
                               "tasks": "must be []",
                               "messages": "must be []"},
         "context": {"mission_id": task["mission_id"], "input_version": task["input_version"],
@@ -140,8 +162,9 @@ def repair_prompt(coordinator, store, task, communication_manifest=None):
                                                "events": str(events) if events.is_file() else None,
                                                "access": "preserved for audit; use communications_index for model-readable copies"},
                     "reframes": reframe_inventory(store, task["mission_id"]),
+                    "eligible_reframes": available_reframes,
                     "read_policy": "Use the listed receipt paths and communications index as read-only evidence. Do not replay the full Mission history or repeat the provider request.",
-                    "instructions": "The original response was rejected by the runtime. Describe the exact rejection and correct only the outer response contract. Acknowledge only completed, unacknowledged reports with report_version <= input_version. Pending/failed reports cannot be acknowledged; describe them as pending in summary. Return a JSON object with decision=wait, all required top-level fields, challenge_responses, tasks=[], and messages=[]. Do not call delegation, research, runner, or messaging tools. The next normal coordinator turn owns further research decisions."}},
+                    "instructions": "The original response was rejected by the runtime. Describe the exact rejection and correct only the outer response contract. " + challenge_instruction + " Pending/failed reports cannot be acknowledged; describe them as pending in summary. Return a JSON object with decision=wait, all required top-level fields, tasks=[], and messages=[]. Do not call delegation, research, runner, or messaging tools. The next normal coordinator turn owns further research decisions."}},
         ensure_ascii=False)
 
 
