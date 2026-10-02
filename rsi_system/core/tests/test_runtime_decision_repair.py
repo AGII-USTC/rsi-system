@@ -87,6 +87,7 @@ def test_protocol_rejection_gets_local_error_and_bounded_repair(tmp_path, reject
             return {"decision": "wait", "summary": "Acknowledged the local protocol error",
                     "expected_information": "completed branch reports",
                     "budget_impact": "one correction only", "stop_condition": "continue",
+                    "reviewed_failures": [{"task_id": original['task_id'], "reason": "preserved for audit"}],
                     "challenge_responses": [{"task_id": child['task_id'], "disposition": "defer",
                                                "reason": "Needs matched evidence", "next_test": "Matched contrast"}]}
         result = runtime._execute(store, store.mission('m'), repair,

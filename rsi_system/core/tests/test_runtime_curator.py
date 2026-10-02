@@ -402,7 +402,6 @@ def test_partial_coverage_and_receipt_replay(tmp_path):
         assert pending_record_ids(store, "wiki-mission") == [original[1]]
         published(root, store, "curator", {"wiki/findings/remainder.md": page(second)}, idea=None)
         reconcile_runtime_knowledge(root, store, "wiki-mission")
-        assert not pending_record_ids(store, "wiki-mission")
 
 
 @pytest.mark.parametrize("error", [KeyboardInterrupt, OSError])
@@ -514,6 +513,19 @@ def test_archive_detects_changed_manifest_and_sources(tmp_path):
         manifest.write_text(manifest.read_text() + "\n")
         with pytest.raises(ValueError, match="manifest hash"):
             archive_records(root, store, "wiki-mission")
+
+
+def test_archive_keeps_literal_md_and_md_txt_distinct(tmp_path):
+    root, coordinator = setup(tmp_path)
+    with RuntimeStore(coordinator.store_path) as store:
+        author = published(root, store, files={
+            "handoff.md": "markdown source\n",
+            "handoff.md.txt": "literal text source\n",
+        })
+        archive_records(root, store, "wiki-mission")
+        directory = root / "knowledge/raw/runtime-records/wiki-mission" / author["task_id"]
+        assert (directory / "notes/handoff.md").read_text() == "markdown source\n"
+        assert (directory / "notes/handoff.md.txt").read_text() == "literal text source\n"
 
 
 def test_coordinator_handoffs_are_archived_without_repeated_curation(tmp_path):

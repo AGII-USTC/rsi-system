@@ -146,8 +146,12 @@ def repair_prompt(coordinator, store, task, communication_manifest=None):
 
 
 def normalize_repaired_response(payload):
+    # A rejected normal response may have carried reviewed_failures. During a
+    # wait-only repair this is historical acknowledgement metadata, not a new
+    # stop decision; accept and ignore it instead of turning a repair into a
+    # second protocol failure.
     allowed = {"decision", "summary", "expected_information", "budget_impact", "stop_condition",
-               "challenge_responses"}
+               "challenge_responses", "reviewed_failures"}
     if not isinstance(payload, dict) or set(payload) - (allowed | {"tasks", "messages"}):
         raise ValueError("decision correction can only supply the read-only coordinator response fields")
     if payload.get("decision") not in {None, "wait"}:

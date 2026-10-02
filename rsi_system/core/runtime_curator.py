@@ -243,6 +243,10 @@ def _archive_records(root: Path, store, mission_id: str) -> list[str]:
         manifest_path, manifest = _published_manifest(root, store, task)
         directory = root / "knowledge/raw/runtime-records" / mission_id / task_id
         provenance = []
+        # A workspace may contain both `handoff.md` and a literal
+        # `handoff.md.txt`. The legacy `.md -> .md.txt` portability suffix
+        # would map them to one archive path and make reconciliation fail.
+        literal_paths = {entry.get("path") for entry in manifest["files"]}
         for item in manifest["files"]:
             relative = workspace_path(item)
             if item["origin"] != "agent_final_response" and relative is None:
@@ -250,7 +254,7 @@ def _archive_records(root: Path, store, mission_id: str) -> list[str]:
             raw = checked_file(manifest_path.parent, item["path"], item["sha256"])
             target_name = "response.json" if item["origin"] == "agent_final_response" else f"notes/{relative}"
             target = directory / target_name
-            if target.suffix == ".md":
+            if target.suffix == ".md" and item["path"] + ".txt" not in literal_paths:
                 target = target.with_suffix(".md.txt")
             _checked_target(root, target)
             if not _inside(directory, target.resolve()):
