@@ -20,6 +20,11 @@ Researcher 发布 Python 文件后，在原有 Runner 派单的 `experiment` 内
 
 探针从 `RSI_EXPLORATION_INPUTS` 读取已发布输入，将产物写入 `RSI_EXPLORATION_OUTPUT`。只挂载项目源码不会自动把文件加入已发布、冻结的研究输入；正式依据仍需有版本和内容哈希。
 
+Python 启动器为新 Run 自动加入冻结项目源码、已发布工作区根目录和原脚本所在的子目录，
+支持 `from body_memory_protocol import ...` 这类同目录依赖，也支持工作区内的包。
+依赖必须与主脚本一起发布；不会从作者仍可修改的实时工作区导入。
+旧 Run 接续使用原来冻结并校验哈希的启动器；修复后重测须派新 Run，保留旧输入与回执。
+
 ## pi0.5 服务
 
 管理员可在环境配置内添加 `policy`。运行时先启动独立模型容器，再启动探针；探针通过 `RSI_POLICY_HOST` 与 `RSI_POLICY_PORT` 调用服务。两个容器使用本次 Run 专属内部网络，不对宿主发布端口。无 `policy` 的模拟器环境完全禁用网络。

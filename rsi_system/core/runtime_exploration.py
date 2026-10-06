@@ -50,6 +50,26 @@ def exploration_run_id(task_id):
     return "run-" + hashlib.sha256(task_id.encode()).hexdigest()[:28]
 
 
+def runner_bootstrap_text(script_workspace_path):
+    """Resolve authored modules from the same frozen workspace as the probe."""
+    parent = Path(script_workspace_path).parent.as_posix()
+    return (
+        "import os, runpy, sys\n"
+        "from pathlib import Path\n"
+        "source = os.environ.get('RSI_EXPLORATION_SOURCE')\n"
+        "inputs = os.environ.get('RSI_EXPLORATION_INPUTS')\n"
+        "paths = [source]\n"
+        "if inputs:\n"
+        "    paths.extend([inputs, str(Path(inputs) / " + repr(parent) + ")])\n"
+        "for path in paths:\n"
+        "    if path and path not in sys.path:\n"
+        "        sys.path.insert(0, path)\n"
+        "script = sys.argv[1]\n"
+        "sys.argv = [script, *sys.argv[2:]]\n"
+        "runpy.run_path(script, run_name='__main__')\n"
+    )
+
+
 def bounded_artifacts(directory, output, stdout_path, stderr_path):
     files = [stdout_path, stderr_path, *sorted(p for p in output.rglob("*")
                                                if not p.is_dir() or p.is_symlink())]
@@ -204,17 +224,19 @@ def execute_exploration(coordinator, store, mission, task):
             raise ValueError("frozen project source changed")
     else:
         source_commit = snapshot_source(coordinator.root, source_directory)
-    bootstrap_text = (
-        "import os, runpy, sys\n"
-        "source = os.environ.get('RSI_EXPLORATION_SOURCE')\n"
-        "if source and source not in sys.path:\n"
-        "    sys.path.insert(0, source)\n"
-        "script = sys.argv[1]\n"
-        "sys.argv = [script, *sys.argv[2:]]\n"
-        "runpy.run_path(script, run_name='__main__')\n"
-    )
     bootstrap = directory / "runner_bootstrap.py"
-    bootstrap_sha256 = hashlib.sha256(bootstrap_text.encode()).hexdigest()
+    if frozen.exists() and "bootstrap_sha256" in saved:
+        # A software upgrade must not change the identity of an existing Run.
+        # Reuse its pinned launcher, validating bytes before receipt recovery.
+        if not bootstrap.is_file() or bootstrap.is_symlink():
+            raise ValueError("frozen Runner bootstrap changed")
+        bootstrap_raw = bootstrap.read_bytes()
+        if hashlib.sha256(bootstrap_raw).hexdigest() != saved["bootstrap_sha256"]:
+            raise ValueError("frozen Runner bootstrap changed")
+    else:
+        bootstrap_text = runner_bootstrap_text(ref["workspace_path"])
+        bootstrap_raw = bootstrap_text.encode()
+    bootstrap_sha256 = hashlib.sha256(bootstrap_raw).hexdigest()
     pinned = {"run_id": run_id, "task_id": task["task_id"], "idea_id": task["scope"]["idea_id"],
               "description": description, "script_sha256": hashlib.sha256(raw).hexdigest(),
               "source_commit": source_commit, "source_sha256": sha256_tree(source_directory),
@@ -253,7 +275,7 @@ def execute_exploration(coordinator, store, mission, task):
             raise ValueError("frozen Runner bootstrap changed")
     else:
         script.write_bytes(raw)
-        bootstrap.write_text(bootstrap_text)
+        bootstrap.write_bytes(bootstrap_raw)
         atomic_json(frozen, pinned)
     receipt = directory / "run_record.json"
     input_sha256 = hashlib.sha256(_json(pinned).encode()).hexdigest()

@@ -170,6 +170,47 @@ def test_runner_bootstrap_imports_frozen_project_source(tmp_path):
         assert run["evidence"]["measurement_status"] == "complete"
 
 
+@pytest.mark.parametrize("script_path", ["probe.py", "nested/probe.py"])
+def test_runner_imports_published_workspace_modules(tmp_path, script_path):
+    runtime = RuntimeCoordinator(project(tmp_path))
+    runtime.start(MissionSpec("m", "run authored modules",
+                              authorization={"allow_server_simulation": True},
+                              resources={"max_runs": 1, "max_seconds_per_run": 5}))
+    with RuntimeStore(runtime.store_path) as store:
+        source = store.create_task("m", "researcher", "write module probe", "test", idea_id="idea-a")
+
+    def author(**kwargs):
+        workspace = Path(context(kwargs)["communications"]["workspace"])
+        script = workspace / script_path
+        script.parent.mkdir(parents=True, exist_ok=True)
+        (workspace / "root_support.py").write_text("ROOT_VALUE = 11\n")
+        (script.parent / "body_memory_protocol.py").write_text("VALUE = 7\n")
+        script.write_text(
+            "from body_memory_protocol import VALUE\n"
+            "from root_support import ROOT_VALUE\n"
+            "from experiments.residual_memory.memory import CANDIDATE\n"
+            "from pathlib import Path\nimport os\n"
+            "Path(os.environ['RSI_EXPLORATION_OUTPUT'], 'result.txt').write_text("
+            "str((VALUE, ROOT_VALUE, CANDIDATE)))\n")
+        return {"summary": "published script and supporting modules"}
+
+    assert runtime.tick(agent_runner=author)["status"] == "completed"
+    description = {"source_task_id": source["task_id"], "script": script_path,
+                   "question": "Can isolated Python import frozen supporting modules?",
+                   "baseline": "import failure", "expected_difference": "result file",
+                   "falsifier": "missing module", "source_reason": "published workspace fixture"}
+    # Mutations after publication must not affect the frozen supporting modules.
+    workspace = runtime.runtime_root / "tasks" / source["task_id"] / "workspace"
+    (workspace / Path(script_path).parent / "body_memory_protocol.py").write_text("VALUE = 999\n")
+    with RuntimeStore(runtime.store_path) as store:
+        store.create_task("m", "runner", "run module probe", "test", idea_id="idea-a", experiment=description)
+    assert runtime.tick()["status"] == "completed"
+    with RuntimeStore(runtime.store_path) as store:
+        run = store.list_runs("m")[0]
+        assert run["status"] == "completed", run["evidence"]
+        assert (Path(run["evidence"]["artifact_dir"]) / "output/result.txt").read_text() == "(7, 11, 1)"
+
+
 def test_explicit_mission_budget_rolls_back_every_requested_task(tmp_path):
     runtime = RuntimeCoordinator(project(tmp_path))
     runtime.start(MissionSpec("m", "bounded collaboration", resources={"max_agent_tasks": 2}))
@@ -272,6 +313,17 @@ def test_v2_run_rows_survive_nullable_candidate_migration(tmp_path):
 
 
 def test_probe_receipt_recovered_without_rerunning_script(tmp_path, monkeypatch):
+    from rsi_system.core import runtime_exploration
+    current_bootstrap = runtime_exploration.runner_bootstrap_text
+    old_bootstrap = (
+        "import os, runpy, sys\n"
+        "source = os.environ.get('RSI_EXPLORATION_SOURCE')\n"
+        "if source and source not in sys.path:\n"
+        "    sys.path.insert(0, source)\n"
+        "script = sys.argv[1]\n"
+        "sys.argv = [script, *sys.argv[2:]]\n"
+        "runpy.run_path(script, run_name='__main__')\n")
+    monkeypatch.setattr(runtime_exploration, "runner_bootstrap_text", lambda path: old_bootstrap)
     runtime = RuntimeCoordinator(project(tmp_path))
     runtime.start(MissionSpec("m", "recover a finished probe",
                               authorization={"allow_server_simulation": True}, resources={"max_runs": 1}))
@@ -297,6 +349,12 @@ def test_probe_receipt_recovered_without_rerunning_script(tmp_path, monkeypatch)
         runtime.tick()
     receipt = runtime.runtime_root / "runs" / exploration_run_id(runner["task_id"]) / "run_record.json"
     before = receipt.read_bytes()
+    frozen = receipt.parent / "input.json"
+    frozen_before = frozen.read_bytes()
+    bootstrap = receipt.parent / "runner_bootstrap.py"
+    bootstrap_before = bootstrap.read_bytes()
+    # Recover under the upgraded runtime without rewriting or rerunning an old Run.
+    monkeypatch.setattr(runtime_exploration, "runner_bootstrap_text", current_bootstrap)
     monkeypatch.setattr(RuntimeStore, "finish_task", original)
     with RuntimeStore(runtime.store_path) as store:
         store.db.execute("UPDATE agent_tasks SET lease_until='2000-01-01T00:00:00+00:00' WHERE task_id=?",
@@ -304,6 +362,8 @@ def test_probe_receipt_recovered_without_rerunning_script(tmp_path, monkeypatch)
         store.db.commit()
     assert RuntimeCoordinator(runtime.root).tick()["recovered"] is True
     assert receipt.read_bytes() == before
+    assert frozen.read_bytes() == frozen_before
+    assert bootstrap.read_bytes() == bootstrap_before
     with RuntimeStore(runtime.store_path) as store:
         assert len(store.list_runs("m")) == 1
 
