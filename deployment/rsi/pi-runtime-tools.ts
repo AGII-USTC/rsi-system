@@ -118,7 +118,7 @@ const delegation = {
     constraints: Type.Optional(Type.Array(Type.Object({ statement: Type.String({ minLength: 1, maxLength: 8000 }), source_ref: Type.String({ minLength: 1, maxLength: 8000 }) }, { additionalProperties: false }))),
     observations: Type.Optional(Type.Array(Type.Object({ statement: Type.String({ minLength: 1, maxLength: 8000 }), source_refs: Type.Array(Type.String({ minLength: 1, maxLength: 8000 }), { minItems: 1 }) }, { additionalProperties: false }))),
     suggestions: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 8000 })))
-  }, { additionalProperties: false, description: "Researcher-only assignment contract. Omit for coder, Runner, analyzer, critic, curator, and ordinary delegation." })),
+  }, { additionalProperties: false, description: "Optional assignment brief for any collaborator role: responsibility, source-linked constraints, observations, and suggestions. Does not change the recipient's role or permissions." })),
 };
 
 const researchCheckpoint = Type.Object({

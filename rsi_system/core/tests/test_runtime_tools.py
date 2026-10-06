@@ -323,6 +323,53 @@ def test_rejected_delegate_can_be_corrected_and_legacy_budget_is_ignored(tmp_pat
         assert len([event for event in store.events("tool-mission") if event["kind"] == "direct_message"]) == 1
 
 
+@pytest.mark.parametrize("role", ["researcher", "coder", "analyzer", "critic", "hypothesis"])
+def test_assignment_brief_reaches_collaborator_without_changing_role(tmp_path, role):
+    root = project(tmp_path)
+    coordinator, parent, _ = setup_parent(root)
+    mandate = {"mode": "direction", "responsibility": "Repair and freeze the qualification script",
+               "constraints": [{"statement": "Keep pi0.5 weights frozen", "source_ref": "mission"}],
+               "observations": [{"statement": "The prior script failed before measurement",
+                                  "source_refs": ["run:failed-probe"]}],
+               "suggestions": ["Persist diagnostics before assertions"]}
+    request = {"tool": "rsi_delegate", "call_id": "scoped-work",
+               "args": {"role": role, "objective": "Scoped work", "idea_id": "idea-a",
+                        "research_mandate": mandate}}
+    bridge = ToolBridge(root, parent["task_id"])
+    result = bridge.call(request)
+    assert result["ok"], result
+    assert bridge.call(request) == result  # Replayed calls do not create another child.
+    with RuntimeStore(coordinator.store_path) as store:
+        child = store.task(result["task_id"])
+        assert child["role"] == role and child["scope"]["research_mandate"] == mandate
+        assert len(store.list_tasks("tool-mission")) == 2
+        claimed = store.claim_task("tool-mission")
+        prompt = coordinator._prompt(role, store.mission("tool-mission"), claimed, store)
+        assert "Repair and freeze the qualification script" in prompt
+    invalid = {**request, "call_id": "invalid", "args": {**request["args"],
+        "research_mandate": {**mandate, "mode": "unsupported"}}}
+    assert not bridge.call(invalid)["ok"]
+    with RuntimeStore(coordinator.store_path) as store:
+        assert len(store.list_tasks("tool-mission")) == 2
+
+
+def test_coordinator_decision_can_assign_coder_with_source_linked_brief(tmp_path):
+    root = project(tmp_path)
+    runtime = RuntimeCoordinator(root)
+    runtime.start(MissionSpec("m", "implement", authorization={"allow_code_candidates": True}))
+    with RuntimeStore(runtime.store_path) as store:
+        store.create_task("m", "coordinator", "dispatch", "test")
+    mandate = {"mode": "check", "responsibility": "Implement the assigned repair",
+               "constraints": [], "observations": [], "suggestions": []}
+    result = runtime.tick(agent_runner=lambda **_: {**decision(), "tasks": [
+        {"role": "coder", "idea_id": "idea-a", "objective": "repair", "reason": "code failure",
+         "research_mandate": mandate}]})
+    assert result["status"] == "completed", result
+    with RuntimeStore(runtime.store_path) as store:
+        child = next(t for t in store.list_tasks("m") if t["role"] == "coder")
+        assert child["scope"]["research_mandate"] == mandate
+
+
 @pytest.mark.parametrize("role", ["coordinator", "researcher", "hypothesis", "coder", "runner", "analyzer", "critic"])
 @pytest.mark.parametrize("legacy_budget", [None, 0, 6])
 def test_every_agent_can_delegate_more_than_six_children(tmp_path, role, legacy_budget):

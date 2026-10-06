@@ -419,8 +419,6 @@ class ToolBridge:
             raise ValueError("Mission does not authorize coding")
         experiment = args.get("experiment")
         research_mandate = normalize_research_mandate(args.get("research_mandate"))
-        if research_mandate is not None and role != "researcher":
-            raise ValueError("research_mandate is only valid for researcher tasks")
         exploration_validation = None
         review_run_id = args.get("review_run_id") or args.get("run_id")
         if review_run_id is not None and role not in {"analyzer", "critic"}:

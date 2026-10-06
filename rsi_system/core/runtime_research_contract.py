@@ -1,4 +1,4 @@
-"""Validation and normalization for researcher mandates and checkpoints.
+"""Validation for collaborator assignment briefs and researcher checkpoints.
 
 The contract deliberately stores source references as opaque addresses.  The
 runtime records what an Agent claimed to read; it does not turn a checkpoint

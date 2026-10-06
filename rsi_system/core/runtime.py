@@ -1254,8 +1254,6 @@ class RuntimeCoordinator:
             if research_mandate is not None:
                 from .runtime_research_contract import normalize_research_mandate
                 research_mandate = normalize_research_mandate(research_mandate)
-                if spec["role"] != "researcher":
-                    raise ValueError("research_mandate is only valid for researcher tasks")
             if spec["role"] == "runner":
                 if candidate:
                     self._validate_run(mission, candidate)
