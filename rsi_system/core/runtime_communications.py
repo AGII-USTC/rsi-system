@@ -106,7 +106,7 @@ def prepare_communications(store, task, output_dir):
             if (task["scope"].get("task_kind") == "problem_reframe"
                     and message.get("from_role") == "coordinator"):
                 continue
-            same_idea = task["scope"]["idea_id"] == message["idea_id"]
+            same_idea = task["scope"]["idea_id"] == message.get("idea_id")
             exact = message.get("to_task_id") is not None and message["to_task_id"] in {
                 task["task_id"], task["scope"]["reply_to_task_id"]}
             addressed = message.get("to_role") == task["role"] and (same_idea or task["role"] == "coordinator")
@@ -122,8 +122,8 @@ def prepare_communications(store, task, output_dir):
             total += len(raw)
             files.append({"path": target.relative_to(manifest_path.parent).as_posix(),
                           "sha256": digest(raw), "bytes": len(raw), "origin": "direct_message",
-                          "author_task_id": message["from_task_id"], "author_role": message["from_role"],
-                          "idea_id": message["idea_id"], "in_reply_to": message.get("in_reply_to")})
+                          "author_task_id": message.get("from_task_id"), "author_role": message["from_role"],
+                          "idea_id": message.get("idea_id"), "in_reply_to": message.get("in_reply_to")})
             continue
         if event["kind"] != "communication_published":
             continue

@@ -33,6 +33,23 @@ def inbox(kwargs):
     return [(item, (manifest.parent / item["path"]).read_text()) for item in data["files"]]
 
 
+def test_human_role_handoff_without_agent_task_or_idea_is_preserved(tmp_path):
+    runtime = RuntimeCoordinator(project(tmp_path))
+    message = {"from_role": "human", "to_role": "coordinator", "text": "Repair accepted; continue from handoffs."}
+    with RuntimeStore(runtime.store_path) as store:
+        store.create_mission(MissionSpec("m", "receive operator feedback"))
+        store.event("m", "direct_message", message)
+        coordinator = store.create_task("m", "coordinator", "continue", "operator feedback")
+        path = prepare_communications(store, coordinator, runtime.runtime_root / "tasks" / coordinator["task_id"])
+        entry = json.loads(path.read_text())["files"][0]
+        assert entry["author_role"] == "human"
+        assert entry["author_task_id"] is None and entry["idea_id"] is None
+        assert json.loads((path.parent / entry["path"]).read_text()) == message
+        researcher = store.create_task("m", "researcher", "other branch", "test isolation")
+        other = prepare_communications(store, researcher, runtime.runtime_root / "tasks" / researcher["task_id"])
+        assert json.loads(other.read_text())["files"] == []
+
+
 def test_research_handoff_reaches_coordinator_and_coder_after_restart(tmp_path):
     root = project(tmp_path)
     runtime = RuntimeCoordinator(root)
