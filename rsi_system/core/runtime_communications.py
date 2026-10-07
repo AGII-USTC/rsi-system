@@ -189,7 +189,7 @@ def snapshot_communications(task, output_dir, payload):
     files, omitted, total = [], [], 0
     if workspace.exists():
         for source in sorted(workspace.rglob("*")):
-            if any(part in {".git", "node-compile-cache", ".context-sources", ".rsi-context-budget.jsonl"}
+            if any(part in {".git", "node-compile-cache", ".context-sources", ".rsi-context-budget.jsonl", ".dev-home"}
                    for part in source.relative_to(workspace).parts):
                 continue
             if source.is_dir() and not source.is_symlink():

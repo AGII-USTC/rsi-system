@@ -177,6 +177,12 @@ export default function (pi: any) {
   }
   register("rsi_delegate", "Persist a child Agent task now. Delegation count and recursion depth are unlimited; returns a task ID or correctable error.",
     Type.Object(delegation));
+  if (["researcher", "coder"].includes(process.env.RSI_AGENT_ROLE || "")) {
+    register("rsi_dev_exec", "Run a development command in your own disposable Docker container using a Mission-allowed environment. /work is your writable task workspace; $RSI_DEV_PYTHON is the container interpreter; /code exists for your task-owned Candidate checkout. Other code, weights and datasets stay read-only. CPU tests can run concurrently across tasks; GPU tests share a slot with formal Runs. resource_busy means nothing ran: wait before retrying. No total command timeout. Full logs and a durable receipt are returned; development tests do not automatically become formal scientific Runs.",
+      Type.Object({ command: Type.String({ minLength: 1, maxLength: 12000 }),
+        environment: Type.Optional(Type.String()), gpu: Type.Optional(Type.Boolean()) },
+      { additionalProperties: false }));
+  }
   register("rsi_research", "Create or revise a versioned research node, record a proposed relation, compose fixed historical inputs into a new node and queued researcher task, or read the graph. Every mutation requires a nonempty data.reason; snapshot needs no data. For create, data.parent is an exact {node_id, revision} reference; when omitted, the new question decomposes the actor's bound node or the Mission root. Only a coordinator may set data.separate_root=true to create an independent root. Composition preserves its source branches and does not imply experimental support.",
     Type.Object({ action: Type.Union(["create", "revise", "relate", "compose", "snapshot"].map(action => Type.Literal(action))),
       data: Type.Optional(researchData),

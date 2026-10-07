@@ -100,9 +100,85 @@ class ToolBridge:
         self.mutex = Lock()
         self.worker: Thread | None = None
         self.worker_error: Exception | None = None
+        self.development_cancelled = Event()
+        self.development_finished = Event()
+        self.development_finished.set()
 
     def wait_elapsed(self) -> float:
         return self.wait_total + (time.monotonic() - self.wait_started if self.wait_started else 0.0)
+
+    def _development_test(self, request):
+        from .development_containers import run_development_test
+        from .gpu_resources import GPUResourceBusy
+
+        args = request["args"]
+        raw_id = request.get("call_id")
+        if not isinstance(raw_id, str) or not 1 <= len(raw_id) <= 256:
+            raise ValueError("tool call ID must be a nonempty bounded string")
+        call_id = hashlib.sha256(raw_id.encode()).hexdigest()
+        if set(args) - {"command", "environment", "gpu"}:
+            raise ValueError("development test accepts command, environment and gpu only")
+        command = args.get("command")
+        if not isinstance(command, str) or not command.strip() or len(command.encode()) > 12000:
+            raise ValueError("development command must be nonempty and at most 12000 bytes")
+        gpu = args.get("gpu", False)
+        if type(gpu) is not bool:
+            raise ValueError("gpu must be a boolean")
+        digest = hashlib.sha256(_json({"tool": "rsi_dev_exec", "args": args}).encode()).hexdigest()
+        with RuntimeStore(self.coordinator.store_path) as store:
+            with store.atomic():
+                task = self._current(store)
+                if task["role"] not in {"researcher", "coder"}:
+                    raise ValueError("development containers belong to Researcher and Coder")
+                mission = store.mission(task["mission_id"])
+                if mission["payload"]["authorization"].get("allow_server_simulation") is not True:
+                    raise ValueError("Mission does not authorize server development tests")
+                previous = store.tool_operation(self.task_id, call_id)
+                if previous:
+                    if previous["request_sha256"] != digest or previous["tool"] != "rsi_dev_exec":
+                        raise ValueError("tool call ID was reused with different arguments")
+                    if previous["response_json"]:
+                        return json.loads(previous["response_json"])
+                # Include old workers that started before the shared GPU lock
+                # was deployed. CPU tests can proceed while they run.
+                if gpu and store.db.execute(
+                        "SELECT 1 FROM agent_tasks WHERE role='runner' AND status='running' LIMIT 1").fetchone():
+                    return {"ok": True, "status": "resource_busy", "retryable": True,
+                            "message": "A formal Runner is active; retry GPU development after its receipt"}
+                store.put_tool_operation(self.task_id, call_id, "rsi_dev_exec", digest, "pending")
+
+        def check_cancelled():
+            if self.development_cancelled.is_set():
+                raise ValueError("development owner invocation ended")
+            with RuntimeStore(self.coordinator.store_path) as fresh:
+                self._current(fresh)
+
+        self.development_finished.clear()
+        try:
+            result = run_development_test(runtime_root=self.coordinator.runtime_root,
+                task=task, mission=mission, config=self.coordinator._config(), call_id=call_id,
+                command=command, environment=args.get("environment"), gpu=gpu,
+                check_cancelled=check_cancelled)
+            passed = result.get("exit_code") == 0 and result.get("status") == "completed" and not result.get("cleanup_error")
+            response = {"ok": passed, **result}
+            if not passed:
+                response['error'] = {"code": "development_command_failed",
+                                     "message": result.get("cleanup_error") or f"Development command ended {result.get('status')} with exit code {result.get('exit_code')}"}
+        except GPUResourceBusy as exc:
+            # Nothing was launched; the same call may retry when the slot frees.
+            return {"ok": True, "status": "resource_busy", "retryable": True, "message": str(exc)}
+        except Exception as exc:
+            response = {"ok": False, "error": {"code": "development_failed", "message": str(exc),
+                        "retryable": True, "repair": "Inspect your command and development logs; retry with a new call ID"}}
+        finally:
+            self.development_finished.set()
+        with RuntimeStore(self.coordinator.store_path) as store:
+            with store.atomic():
+                operation = store.tool_operation(self.task_id, call_id)
+                if operation and operation["status"] == "pending":
+                    store.put_tool_operation(self.task_id, call_id, "rsi_dev_exec", digest,
+                                             "completed" if response["ok"] else "failed", response)
+        return response
 
     def _audit_bash(self, request: Mapping[str, Any]) -> dict[str, Any]:
         from .audit_shell import MAX_COMMAND_SECONDS, run_audit_shell
@@ -771,11 +847,13 @@ class ToolBridge:
                         "rsi_branch_control",
                         "rsi_message", "rsi_inbox", "rsi_status", "rsi_wait", "rsi_read_handoff",
                         "rsi_wiki_check", "rsi_wiki_submit", "rsi_research", "rsi_research_checkpoint",
-                        "rsi_audit_bash"} or not isinstance(args, dict):
+                        "rsi_audit_bash", "rsi_dev_exec"} or not isinstance(args, dict):
             return {"ok": False, "error": {"code": "invalid_request", "message": "invalid RSI tool request"}}
         try:
             if tool == "rsi_audit_bash":
                 return self._audit_bash(request)
+            if tool == "rsi_dev_exec":
+                return self._development_test(request)
             raw_call_id = request.get("call_id")
             if not isinstance(raw_call_id, str) or not 1 <= len(raw_call_id) <= 256:
                 raise ValueError("tool call ID must be a nonempty bounded string")
@@ -954,6 +1032,8 @@ def serve_tools(root: Path, task_id: str):
     try:
         yield path, bridge
     finally:
+        bridge.development_cancelled.set()
+        bridge.development_finished.wait(timeout=45)
         stop_heartbeat.set()
         heart.join(timeout=2)
         server.shutdown()

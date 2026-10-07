@@ -206,3 +206,29 @@ console.log(JSON.stringify({checked: checked.details, connections}));
     assert result["checked"]["error"]["retryable"] is True
     assert "timed out" in result["checked"]["error"]["message"]
     assert result["connections"] == 3
+
+
+def test_development_tool_reaches_bridge_and_guard_accepts_owner(tmp_path, monkeypatch):
+    from rsi_system.core import development_containers
+    with tempfile.TemporaryDirectory(prefix='rsi-dev-wire-', dir='/tmp') as directory:
+        root = project(Path(directory))
+        _, parent, _ = setup_parent(root)
+        seen = []
+        def development(**kwargs):
+            seen.append(kwargs['command'])
+            return {'kind': 'development_test', 'status': 'completed', 'exit_code': 0,
+                    'scientific_evidence': False, 'stdout_tail': 'container-test-passed'}
+        monkeypatch.setattr(development_containers, 'run_development_test', development)
+        with serve_tools(root, parent['task_id']) as (socket_path, _):
+            result = run_node(tmp_path, """
+const {default: guard} = await import(process.env.RSI_EXTENSION_URL.replace('pi-runtime-tools.ts','pi-guard.ts'));
+const hooks={};guard({registerTool() {},on(name,fn){hooks[name]=fn;}});
+if(await hooks.tool_call({toolName:'rsi_dev_exec',input:{command:'test'}})) throw Error('owner blocked');
+const result=await tools.rsi_dev_exec.execute('owned-test',{command:'test'});
+const replay=await tools.rsi_dev_exec.execute('owned-test',{command:'test'});
+process.env.RSI_AGENT_ROLE='critic';
+if(!(await hooks.tool_call({toolName:'rsi_dev_exec',input:{command:'test'}}))?.block) throw Error('reviewer allowed');
+console.log(JSON.stringify({result:JSON.parse(result.content[0].text),replay:JSON.parse(replay.content[0].text)}));
+""", socket_path, idle_ms=500, role='researcher')
+        assert result['result']['ok'] and not result['result']['scientific_evidence']
+        assert result['replay'] == result['result'] and seen == ['test']

@@ -24,7 +24,8 @@ def test_runner_uses_authorized_profile_and_recovery_keeps_pinned_environment(tm
     monkeypatch.setattr(exploration, 'prepare_environment', lambda profile: prepared)
     calls = []
     @contextmanager
-    def launch(pinned, directory, argv, env, *, check_cancelled=None):
+    def launch(pinned, directory, argv, env, *, check_cancelled=None, resource_root=None):
+        assert resource_root == runtime.runtime_root
         check_cancelled()
         calls.append(pinned)
         yield argv, env, {'kind': 'docker', 'image_id': pinned['image_id'], 'test_double': True}

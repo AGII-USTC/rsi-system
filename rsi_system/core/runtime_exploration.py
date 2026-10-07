@@ -359,6 +359,7 @@ def execute_exploration(coordinator, store, mission, task):
             # Persist intent before creating containers or a policy sidecar.
             mark_started(directory)
             boundary = (launch_environment(pinned["runner_environment"], directory, argv, env,
+                                           resource_root=coordinator.runtime_root,
                                            check_cancelled=lambda: store.validate_task(task))
                         if pinned.get("runner_environment") else nullcontext((argv, env, execution)))
             process = None

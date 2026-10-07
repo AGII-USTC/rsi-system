@@ -1,7 +1,7 @@
 """Administrator-selected Docker environments for exploration Runner probes."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -124,6 +124,14 @@ def _image_id(image):
 
 def _host_env():
     return {key: value for key, value in os.environ.items() if key in _HOST_ENV}
+
+
+def gpu_resource_label(runtime_root):
+    return "rsi.gpu-resource=" + hashlib.sha256(str(Path(runtime_root).resolve()).encode()).hexdigest()[:24]
+
+
+def gpu_containers_active(runtime_root):
+    return bool(_docker("ps", "--quiet", "--filter", "label=" + gpu_resource_label(runtime_root)).stdout.strip())
 
 
 def select_environment(config, mission, description):
@@ -296,7 +304,22 @@ def cleanup_environment(pinned, directory):
 
 
 @contextmanager
-def launch_environment(pinned, directory, argv, env, *, check_cancelled=None):
+def launch_environment(pinned, directory, argv, env, *, check_cancelled=None, resource_root=None):
+    """Formal GPU Runs share their slot with container development tests."""
+    from .gpu_resources import gpu_slot
+    uses_gpu = pinned.get("gpu") or (pinned.get("policy") or {}).get("gpu")
+    slot = (gpu_slot(Path(resource_root), wait=True, check_cancelled=check_cancelled,
+                     occupied=lambda: gpu_containers_active(resource_root))
+            if uses_gpu and resource_root is not None else nullcontext())
+    with slot:
+        with _launch_environment(pinned, directory, argv, env,
+                                 check_cancelled=check_cancelled,
+                                 resource_label=gpu_resource_label(resource_root) if uses_gpu and resource_root else None) as result:
+            yield result
+
+
+@contextmanager
+def _launch_environment(pinned, directory, argv, env, *, check_cancelled=None, resource_label=None):
     """Start isolated containers and yield a Docker exec command for the probe."""
     if check_cancelled is not None and not callable(check_cancelled):
         raise ValueError("check_cancelled must be callable")
@@ -333,6 +356,8 @@ def launch_environment(pinned, directory, argv, env, *, check_cancelled=None):
                 policy_env["PYTHONPATH"] = os.pathsep.join(policy["pythonpath"])
             args = _container_args(policy_name, policy["image_id"], directory, pinned["mounts"],
                                    policy_env, policy["gpu"], network, alias="policy")
+            if resource_label and policy["gpu"]:
+                args[-1:-1] = ["--label", resource_label]
             _docker(*args, *policy["command"])
             # Each check has a timeout; model loading itself has no artificial deadline.
             check = ("import socket; socket.create_connection(('127.0.0.1', "
@@ -365,6 +390,8 @@ def launch_environment(pinned, directory, argv, env, *, check_cancelled=None):
         args = _container_args(evaluation, pinned["image_id"], directory, pinned["mounts"],
                                container_env, pinned["gpu"], network if policy else "none",
                                writable_output=True)
+        if resource_label and pinned["gpu"]:
+            args[-1:-1] = ["--label", resource_label]
         _docker(*args, pinned["python"], "-c", "import time; time.sleep(2147483647)")
         python_args = ["-s" if item == "-I" else item for item in argv[1:]]
         command = ["docker", "exec", "--workdir", str(directory), evaluation,

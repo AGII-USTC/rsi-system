@@ -714,6 +714,13 @@ class RuntimeCoordinator:
                                           "Your Runner script may load policies in process or start and stop its own local policy subprocesses; no resident policy is loaded by runtime.")}}
             for name in allowed_environments if name in environment_config}
         context["exploration_contract"]["default_environment"] = mission["payload"]["resources"].get("runner_environment")
+        if role in {"researcher", "coder"}:
+            context["development_contract"] = {
+                "tool": "rsi_dev_exec", "environments": list(context["exploration_contract"]["available_environments"]),
+                "workspace": "/work", "candidate_checkout": "/code (Candidate Coder only)",
+                "python": "$RSI_DEV_PYTHON", "gpu": "opt-in; shared slot with formal Runs",
+                "isolation": "one disposable container and writable workspace per task; independent localhost; references read-only",
+                "timeout": None, "evidence": "development diagnostics; use published file IDs and formal Runs for controlled results"}
         context["exploration_contract"]["environment_usage"] = (
             "Select only an available environment name; use its exact container paths, not host paths. "
             "Runtime owns images, reference mounts, GPU and private networking. Your own research deployment code and "
@@ -873,10 +880,8 @@ class RuntimeCoordinator:
                     if not task["scope"]["idea_id"]:
                         raise ValueError("exploratory coder needs an Idea scope")
                 else:
-                    base_commit = candidate["code_commit"] or git(self.root, "rev-parse", "HEAD")
-                    info = create_workspace(self.root, self.runtime_root / "worktrees", candidate["candidate_id"], base_commit)
+                    info, _ = self._coder_workspace(task, candidate)
                     cwd = info.path
-                    store.update_candidate(candidate["candidate_id"], status="coding", worktree=str(info.path))
             if task["role"] == "runner":
                 result = self._execute_runner(store, mission, task)
                 if task["scope"].get("research_node_id"):
@@ -1013,8 +1018,10 @@ class RuntimeCoordinator:
             ignored_fields = [field for field in ("tasks", "delegate_tasks", "messages") if payload.get(field)] if tool_protocol else []
             if ignored_fields:
                 payload = {**payload, "tasks": [], "delegate_tasks": [], "messages": []}
-            handoff = snapshot_communications(task, output_dir, payload)
             prepared = self._prepare_coder(store, task) if task["role"] == "coder" and candidate else None
+            if prepared:
+                payload = {**payload, "candidate_implementation": prepared}
+            handoff = snapshot_communications(task, output_dir, payload)
             with store.atomic():
                 store.validate_task(task)
                 if task["role"] == "coordinator":
@@ -1026,7 +1033,9 @@ class RuntimeCoordinator:
                 elif task["role"] == "hypothesis":
                     self._handle_hypothesis(store, mission, task, payload)
                 elif task["role"] == "coder":
-                    self._handle_coder(store, mission, task, prepared)
+                    publication = self._handle_coder(store, mission, task, prepared)
+                    if publication:
+                        payload = {**payload, "candidate_publication": publication}
                 elif task["role"] in {"analyzer", "critic"}:
                     self._handle_review(store, mission, task, payload)
                 elif task["role"] == "curator":
@@ -1646,13 +1655,44 @@ class RuntimeCoordinator:
                         {"candidate_id": registered["candidate_id"], "source_commit": base_commit})
         return registered
 
+    def _coder_workspace(self, task, candidate):
+        """Pin a private checkout once per task, including across retries."""
+        from .workspace import WorkspaceInfo
+        manifest = self.runtime_root / "tasks" / task["task_id"] / "candidate-workspace.json"
+        identity = "coder-" + hashlib.sha256(task["task_id"].encode()).hexdigest()[:28]
+        if manifest.exists():
+            saved = json.loads(manifest.read_text())
+            if saved["candidate_id"] != candidate["candidate_id"] or saved["task_id"] != task["task_id"]:
+                raise ValueError("Candidate workspace belongs to a different task")
+            info = WorkspaceInfo.from_dict({key: saved[key] for key in
+                ("path", "repo_root", "base_commit", "branch", "cycle_id")})
+            expected = self.runtime_root / "worktrees" / info.cycle_id
+            legacy = saved.get('legacy') is True and info.cycle_id == candidate['candidate_id']
+            if info.path.resolve() != expected.resolve() or (info.cycle_id != identity and not legacy):
+                raise ValueError("Candidate workspace is not task-owned")
+            return create_workspace(self.root, self.runtime_root / "worktrees", info.cycle_id,
+                                    info.base_commit), saved["candidate_code_commit"]
+        base = candidate["code_commit"] or git(self.root, "rev-parse", "HEAD")
+        # Preserve a pre-upgrade task's already pinned checkout when recovering
+        # its frozen input. All newly started Coders receive task-owned branches.
+        legacy_path = self.runtime_root / 'worktrees' / candidate['candidate_id']
+        legacy = (manifest.parent / 'input.json').exists() and legacy_path.is_dir()
+        if legacy:
+            identity = candidate['candidate_id']
+        info = create_workspace(self.root, self.runtime_root / "worktrees", identity, base)
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        atomic_json(manifest, {**info.to_dict(), "task_id": task["task_id"],
+                              "candidate_id": candidate["candidate_id"],
+                              "legacy": legacy,
+                              "candidate_code_commit": candidate["code_commit"]})
+        return info, candidate["code_commit"]
+
     def _prepare_coder(self, store, task):
         candidate = store.candidate(task.get("candidate_id")) if task.get("candidate_id") else None
         if candidate is None:
             raise ValueError("coder task has no candidate")
         candidate_id = candidate["candidate_id"]
-        info = create_workspace(self.root, self.runtime_root / "worktrees", candidate_id,
-                                candidate["code_commit"] or git(self.root, "rev-parse", "HEAD"))
+        info, expected_commit = self._coder_workspace(task, candidate)
         output_dir = self.runtime_root / "tasks" / task["task_id"]
         evidence = inspect_candidate(info)
         if candidate.get("kind") == "baseline" and evidence["files"]:
@@ -1660,16 +1700,25 @@ class RuntimeCoordinator:
         committed = commit_candidate(info, python=self._config()["python"], evidence_dir=output_dir / "checks",
                                      sandbox=self._config().get("sandbox", True))
         return {"candidate_id": candidate_id, "source_commit": committed["source_commit"],
-                "worktree": str(info.path), "diff_sha256": evidence["diff_sha256"]}
+                "worktree": str(info.path), "diff_sha256": evidence["diff_sha256"],
+                "expected_candidate_commit": expected_commit, "task_id": task["task_id"]}
 
     def _handle_coder(self, store, mission, task, prepared):
         if prepared is None:
             store.event(mission["mission_id"], "exploratory_prototype", {
                 "task_id": task["task_id"], "idea_id": task["scope"]["idea_id"]})
             return
+        current = store.candidate(prepared["candidate_id"])
+        if current["code_commit"] != prepared["expected_candidate_commit"]:
+            publication = {**prepared, "status": "requires_reconciliation",
+                           "current_candidate_commit": current["code_commit"],
+                           "reason": "Another Coder published after this task's checkout was pinned; retain both branches"}
+            store.event(mission["mission_id"], "candidate_branch_ready", publication)
+            return publication
         store.update_candidate(prepared["candidate_id"], status="ready", code_commit=prepared["source_commit"],
                                worktree=prepared["worktree"])
         store.event(mission["mission_id"], "candidate_ready", prepared)
+        return {"status": "published", "source_commit": prepared["source_commit"]}
 
     def _execute_runner(self, store, mission, task):
         return execute_runner(self, store, mission, task)

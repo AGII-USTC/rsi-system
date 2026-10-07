@@ -19,6 +19,7 @@ for role in ("coordinator", "researcher", "coder"):
     TOOLS[role] += ",mcp,github_search,github_read_file,web_search,fetch_content,get_search_content"
 for role in ("researcher", "coder"):
     TOOLS[role] += ",bash"
+    TOOLS[role] += ",rsi_dev_exec"
 for role in ("analyzer", "critic"):
     TOOLS[role] += ",bash"
 for role in TOOLS:

@@ -371,6 +371,13 @@ export default function (pi: any) {
     },
   });
   pi.on("tool_call", async (event: any) => {
+    if (event.toolName === "rsi_dev_exec") {
+      if (!["researcher", "coder"].includes(process.env.RSI_AGENT_ROLE || ""))
+        return { block: true, reason: "Development containers belong to Researcher and Coder" };
+      if (!process.env.RSI_TOOL_SOCKET)
+        return { block: true, reason: "Development containers require the active RSI bridge" };
+      return;
+    }
     if (acceptedSubmissionCallId !== undefined)
       return { block: true, terminate: true, reason: "This Curator task already has an accepted submission" };
     if (event.toolName === "rsi_read_source") {

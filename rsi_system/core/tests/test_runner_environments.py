@@ -105,6 +105,37 @@ def test_launch_has_readonly_inputs_only_output_writable_and_filtered_env(tmp_pa
     assert json.loads((run / "docker_environment.json").read_text())["status"] == "cleaned"
 
 
+def test_formal_gpu_run_waits_for_development_and_checks_cancellation(tmp_path, monkeypatch):
+    from threading import Thread, Event
+    from rsi_system.core.gpu_resources import gpu_slot
+    calls = fake_docker(monkeypatch)
+    monkeypatch.setattr(backend, 'gpu_containers_active', lambda root: False)
+    pinned = backend.prepare_environment(profile(tmp_path))
+    run = tmp_path / 'run'
+    (run / 'output').mkdir(parents=True)
+    entered, checked, done = Event(), Event(), Event()
+    errors = []
+    def execute():
+        try:
+            with backend.launch_environment(pinned, run, ['python', 'probe.py'], {},
+                    resource_root=tmp_path / 'runtime', check_cancelled=lambda: checked.set()):
+                entered.set()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+    with gpu_slot(tmp_path / 'runtime'):
+        worker = Thread(target=execute)
+        worker.start()
+        assert checked.wait(2)
+        assert not entered.is_set() and not any(call[0] == 'run' for call in calls)
+    assert done.wait(3)
+    worker.join()
+    assert entered.is_set() and not errors
+    container = next(c for c in calls if c[0] == 'run')
+    assert backend.gpu_resource_label(tmp_path / 'runtime') in container
+
+
 def test_policy_internal_network_readiness_and_cleanup_after_body_error(tmp_path, monkeypatch):
     calls = fake_docker(monkeypatch, policy=True)
     pinned = backend.prepare_environment(profile(tmp_path, policy=True))

@@ -369,7 +369,7 @@ def test_coder_commit_survives_crash_without_second_model_call(tmp_path, monkeyp
         store.create_hypothesis("m", hypothesis(status="candidate_ready"))
         commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
         store.create_candidate("m", candidate(kind="hypothesis", hypothesis_id="h", hypothesis_version=1), code_commit=commit)
-        store.create_task("m", "coder", "implement", "test", candidate_id="c0")
+        coder_task = store.create_task("m", "coder", "implement", "test", candidate_id="c0")
     def coding(**kwargs):
         (kwargs["cwd"] / "experiments/residual_memory/memory.py").write_text("CANDIDATE = 2\n")
         return {"summary": "implemented fixture"}
@@ -380,7 +380,8 @@ def test_coder_commit_survives_crash_without_second_model_call(tmp_path, monkeyp
     monkeypatch.setattr(RuntimeStore, "finish_task", original)
     with RuntimeStore(coordinator.store_path) as store:
         expire(store)
-    worktree = root / ".rsi/runtime/worktrees/c0"
+    workspace_receipt = root / '.rsi/runtime/tasks' / coder_task['task_id'] / 'candidate-workspace.json'
+    worktree = Path(json.loads(workspace_receipt.read_text())['path'])
     committed = subprocess.check_output(["git", "-C", str(worktree), "rev-parse", "HEAD"], text=True).strip()
     assert committed != commit
     result = coordinator.tick(agent_runner=lambda **_: pytest.fail("coder must reuse receipt"))

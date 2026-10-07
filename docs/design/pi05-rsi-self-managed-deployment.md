@@ -32,6 +32,13 @@ Researcher/Coder 可将所需的参考源码复制到自己的工作区改动。
 
 ## 自己实现、启动和调试
 
+Researcher/Coder 现在也可以直接调用 `rsi_dev_exec`，在自己独立的
+`pi05-self-managed` 容器里开发与测试，不必先结束任务再等 Runner。
+容器 `/work` 是自己的可写工作区，`$RSI_DEV_PYTHON` 是实际容器解释器。
+CPU 自测可并行，显式 `gpu=true` 与正式 Docker Run 共用 GPU 资源锁。
+完整机制、并行 Candidate 提交和异常接续见
+[并行开发容器](parallel-development-containers.md)。
+
 Coder 的 Linux 工作区 shell 可以直接使用宿主机 NVIDIA GPU 做开发测试，
 无需先完成任务或等待 Runner。使用已安装且支持 CUDA 的 Python 环境，
 把代码、缓存和测试产物写入自己的工作区；权重原件仍只读。
