@@ -336,6 +336,10 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
     if provider:
         argv += ["--provider", provider]
     env = os.environ.copy()
+    if role == "coder" and env.get("CUDA_VISIBLE_DEVICES") == "":
+        # The coordinator service hides CUDA for its own process, not for the
+        # user-authorized Coder GPU subprocess. Preserve explicit device lists.
+        env.pop("CUDA_VISIBLE_DEVICES")
     if python_executable and role in {"researcher", "coder"}:
         # Keep the venv's entry-point path: resolving a Python symlink loses its
         # adjacent pyvenv.cfg and selects the underlying base environment.

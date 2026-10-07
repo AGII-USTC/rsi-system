@@ -289,13 +289,14 @@ def test_coder_prompt_requires_reuse_audit_before_new_code(tmp_path):
 
 
 @pytest.mark.parametrize("role", ["coordinator", "researcher", "hypothesis", "analyzer", "critic", "reviewer", "coder"])
-def test_pi_subprocess_keeps_semantic_role_and_gives_every_role_write_tools(tmp_path, role):
+def test_pi_subprocess_keeps_semantic_role_and_gives_every_role_write_tools(tmp_path, role, monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     fake = tmp_path / "fake-pi"
     fake.write_text(f"#!{sys.executable}\n" + '''import json,os,sys
 sys.stdin.read()
 payload={"role":os.environ["RSI_AGENT_ROLE"],"tools":sys.argv[sys.argv.index("--tools")+1],
 "workspace":os.environ["RSI_AGENT_WORKSPACE"],"communications":os.environ.get("RSI_COMMUNICATION_MANIFEST"),
-"argv":sys.argv}
+"argv":sys.argv,"cuda_visible_devices":os.environ.get("CUDA_VISIBLE_DEVICES")}
 print(json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop",
 "content":[{"type":"text","text":json.dumps(payload)}]}}))
 ''')
@@ -313,6 +314,7 @@ print(json.dumps({"type":"message_end","message":{"role":"assistant","stopReason
                        guard=guard if role not in {"analyzer", "critic"} else None,
                        communication_manifest=manifest)
     assert result["role"] == result["payload"]["role"] == role
+    assert result["payload"]["cuda_visible_devices"] == (None if role == "coder" else "")
     tools = set(result["payload"]["tools"].split(","))
     assert {"write", "edit"} <= tools
     assert Path(result["payload"]["workspace"]).is_dir()
