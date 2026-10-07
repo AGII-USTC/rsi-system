@@ -7,6 +7,16 @@ import sys
 import json
 
 
+def gpu_device_paths(device_root: Path = Path('/dev')) -> list[Path]:
+    """Expose NVIDIA compute devices without granting the rest of host /dev."""
+    candidates = [device_root / name for name in (
+        'nvidiactl', 'nvidia-uvm', 'nvidia-uvm-tools', 'nvidia-modeset')]
+    candidates.extend(path for path in device_root.glob('nvidia[0-9]*')
+                      if path.name.removeprefix('nvidia').isdigit())
+    candidates.extend((device_root / 'nvidia-caps').glob('nvidia-cap[0-9]*'))
+    return sorted(path for path in candidates if path.is_char_device())
+
+
 def candidate_environment() -> dict[str, str]:
     allowed = {"PATH", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "MUJOCO_GL"}
     env = {key: value for key, value in os.environ.items() if key in allowed}
@@ -17,13 +27,19 @@ def candidate_environment() -> dict[str, str]:
 
 def agent_command(argv: list[str], *, workspace: Path, candidate_workspace: Path | None = None,
                   agent_config: Path | None = None,
-                  external_manifest: Path | None = None) -> list[str]:
+                  external_manifest: Path | None = None, gpu: bool = False) -> list[str]:
     """Keep shell exploration writable only in the task and assigned candidate workspaces."""
     bwrap = shutil.which("bwrap")
     if not bwrap or sys.platform != "linux":
         raise ValueError("agent shell execution requires Linux bubblewrap")
     args = [bwrap, "--die-with-parent", "--new-session", "--ro-bind", "/", "/",
             "--proc", "/proc", "--dev", "/dev"]
+    if gpu:
+        devices = gpu_device_paths()
+        if any(path.parent.name == 'nvidia-caps' for path in devices):
+            args += ['--dir', '/dev/nvidia-caps']
+        for path in devices:
+            args += ['--dev-bind', str(path), str(path)]
     for path in (workspace, candidate_workspace, agent_config):
         if path is not None:
             actual = path.resolve()

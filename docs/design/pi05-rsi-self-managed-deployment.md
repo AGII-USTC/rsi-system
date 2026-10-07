@@ -32,6 +32,14 @@ Researcher/Coder 可将所需的参考源码复制到自己的工作区改动。
 
 ## 自己实现、启动和调试
 
+Coder 的 Linux 工作区 shell 可以直接使用宿主机 NVIDIA GPU 做开发测试，
+无需先完成任务或等待 Runner。使用已安装且支持 CUDA 的 Python 环境，
+把代码、缓存和测试产物写入自己的工作区；权重原件仍只读。
+加载前检查显存与在途实验，结束后清理自己启动的进程，不停止其他任务释放资源。
+GPU 开发测试保留日志和来源，但不自动成为受控实验的科学结果。
+需要容器内 OpenPI/LIBERO 依赖和冻结输入回执时继续使用 Runner；
+宿主机 GPU 权限不代表宿主机拥有容器内的 Python 依赖。
+
 先在任务工作区编写 Python 入口和支持模块，完成发布，再使用返回的 `file_id`
 派给 Runner，`experiment.environment` 选择 `pi05-self-managed`。
 支持文件通过 `RSI_EXPLORATION_INPUTS` 读取；不要找其他任务的私有工作区。

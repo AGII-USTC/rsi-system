@@ -365,7 +365,8 @@ def run_agent(*, executable: str, role: str, prompt: str, cwd: Path, output_dir:
         env["PI_CODING_AGENT_DIR"] = str(agent_config)
         candidate_workspace = cwd if role == "coder" and not exploratory else None
         argv = agent_command(argv, workspace=workspace, candidate_workspace=candidate_workspace,
-                             agent_config=agent_config, external_manifest=external_manifest)
+                             agent_config=agent_config, external_manifest=external_manifest,
+                             gpu=role == "coder")
         env["TMPDIR"] = str(workspace)
     env.pop("RSI_EVIDENCE_MANIFEST", None)
     env.pop("RSI_COMMUNICATION_MANIFEST", None)
